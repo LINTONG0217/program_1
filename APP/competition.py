@@ -121,6 +121,14 @@ def main():
         print("CONTROLLER: SmartCarController (forced, minimal)")
         controller = SmartCarController(chassis, vision, config)
 
+        try:
+            from Module.uart_car_link import UartCarLink
+            print("Initializing Seekfree Wireless UART Link...")
+            car_link = UartCarLink(getattr(config, "CAR_LINK_UART_ID", 2), getattr(config, "CAR_LINK_BAUDRATE", 115200))
+        except Exception as e:
+            print("Failed to initialize Seekfree Link:", e)
+            car_link = None
+
         if bool(getattr(config, "BOOT_WAIT_C14_ENABLE", True)):
             try:
                 from machine import Pin
@@ -141,7 +149,36 @@ def main():
             except Exception:
                 pass
 
-        controller.run_forever()
+        last_sync = 0
+        while True:
+            try:
+                controller.update()
+                
+                # --- Seekfree Wireless Dual Car Sync ---
+                if car_link:
+                    # 1. 鎺ユ敹鍙︿竴鍙ц溅鐨勭姸鎬?                    if car_link.uart and car_link.uart.any():
+                        remote_msg = car_link.receive()
+                        if remote_msg:
+                            # 濡傛灉闇€瑕佹牴鎹彟涓€鍙ц溅鐨勭姸鎬佸仛鍐崇瓥锛屽彲浠ュ湪鎺у埗鍣ㄩ噷闈㈠鐞?                            controller.remote_data = car_link.get_remote_data()
+                            # debug only
+                            # print("<- Remote:", controller.remote_data)
+                            
+                    # 2. 瀹氭湡鍙戦€佽嚜宸辩殑鐘舵€佸埌鍙︿竴鍙ц溅
+                    now = time.ticks_ms()
+                    if time.ticks_diff(now, last_sync) >= getattr(config, "CAR_LINK_SEND_MS", 100):
+                        last_sync = now
+                        my_status = {
+                            "state": controller.state,
+                            "target_visible": bool(getattr(controller, "_last_frame", {}).get("object"))
+                        }
+                        car_link.send(my_status)
+                        
+            except Exception as e:
+                import sys
+                print("CRASH IN UPDATE", repr(e))
+                sys.print_exception(e)
+                raise
+            time.sleep_ms(config.LOOP_DELAY_MS)
         return
 
     # Full competition runtime (heavier).

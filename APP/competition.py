@@ -1,7 +1,7 @@
-import sys
 import time
 
 from Module import config
+from Module.dual_car_coop import build_robot_status
 
 
 def build_chassis():
@@ -89,145 +89,166 @@ def build_uwb_pose(cfg):
         return None
 
 
-def main():
+def build_car_link(cfg):
+    if not bool(getattr(cfg, "COMPETITION_DUAL_ENABLE", False)):
+        return None
     try:
-        print("competition: build=2026-04-04 basic-fallback")
+        from Module.uart_car_link import UartCarLink
+
+        print("Initializing Seekfree Wireless UART Link...")
+        return UartCarLink(
+            getattr(cfg, "CAR_LINK_UART_ID", 2),
+            getattr(cfg, "CAR_LINK_BAUDRATE", 115200),
+            tx_pin=getattr(cfg, "CAR_LINK_TX_PIN", None),
+            rx_pin=getattr(cfg, "CAR_LINK_RX_PIN", None),
+        )
+    except Exception as e:
+        print("Failed to initialize Seekfree Link:", e)
+        return None
+
+
+def build_basic_display(cfg):
+    if not bool(getattr(cfg, "LCD_ENABLE", True)):
+        return None
+    try:
+        from BSP.board_runtime import LCDGridDisplay
+
+        display = LCDGridDisplay(cfg)
+        display.init()
+        return display
+    except Exception as e:
+        print("basic lcd unavailable:", e)
+        return None
+
+
+def build_master_status(controller, pose, chassis, cfg):
+    frame = getattr(controller, "_last_frame", None)
+    target_visible = bool(isinstance(frame, dict) and frame.get("object"))
+    push_states = ("align_push", "push", "coop_push")
+    extra = {
+        "target_visible": target_visible,
+        "coop_push_active": bool(getattr(controller, "state", "") in push_states),
+        "formation_enabled": bool(getattr(cfg, "COOP_FORMATION_ENABLE", True)),
+    }
+    return build_robot_status("master", pose=pose, chassis=chassis, state=getattr(controller, "state", None), extra=extra)
+
+
+def maybe_print_pose(tag, pose, last_ms_holder, cfg):
+    if not bool(getattr(cfg, "DUAL_COORD_PRINT_ENABLE", True)):
+        return
+    if not pose:
+        return
+    now = time.ticks_ms()
+    interval = int(getattr(cfg, "DUAL_COORD_PRINT_MS", 250))
+    if time.ticks_diff(now, last_ms_holder.get("value", 0)) < interval:
+        return
+    last_ms_holder["value"] = now
+    print(
+        "[{} POSE] x={:.3f} y={:.3f} yaw={:.1f}".format(
+            tag,
+            float(pose.get("x", 0.0)),
+            float(pose.get("y", 0.0)),
+            float(pose.get("yaw", 0.0)),
+        )
+    )
+
+
+def wait_c14_start_with_pin():
+    if not bool(getattr(config, "BOOT_WAIT_C14_ENABLE", True)):
+        return
+    try:
+        from machine import Pin
+
+        pull_up = getattr(Pin, "PULL_UP_47K", None)
+        if pull_up is not None:
+            key_pin = Pin(config.NAV_KEY_PIN, Pin.IN, pull_up)
+        else:
+            key_pin = Pin(config.NAV_KEY_PIN, Pin.IN)
+
+        print("press C14 to start")
+        while key_pin.value() != 0:
+            time.sleep_ms(20)
+        time.sleep_ms(60)
+        while key_pin.value() == 0:
+            time.sleep_ms(20)
+        print("C14 start")
     except Exception:
         pass
-    force_basic = bool(getattr(config, "COMPETITION_FORCE_BASIC_CONTROLLER", False))
-    is_lidar_backend = True
-    if force_basic:
-        # Ultra-minimal path: import controller as early as possible (heap is largest now)
-        # and avoid heavy runtime/display/control modules to prevent MemoryError.
+
+
+def run_basic_mode():
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:
+        pass
+
+    from Module.task_controller_lidar_push import LidarSmartPushController
+
+    chassis = build_chassis()
+    vision = build_vision(config)
+    uwb_pose_source = build_uwb_pose(config)
+    basic_display = build_basic_display(config)
+
+    try:
+        import gc
+
+        gc.collect()
+    except Exception:
+        pass
+
+    print("CONTROLLER: SmartCarController (forced, minimal)")
+    controller = LidarSmartPushController(chassis, vision, config)
+    car_link = build_car_link(config)
+
+    wait_c14_start_with_pin()
+
+    last_sync = 0
+    pose_print_ms = {"value": 0}
+    while True:
         try:
-            import gc
+            controller.update()
+            pose = uwb_pose_source() if callable(uwb_pose_source) else None
 
-            gc.collect()
-        except Exception:
-            pass
+            if basic_display is not None:
+                basic_display.update(chassis, pose)
+            maybe_print_pose("MASTER", pose, pose_print_ms, config)
 
-        from Module.task_controller_lidar_push import LidarSmartPushController as SmartCarController
+            if car_link:
+                if car_link.uart and car_link.uart.any():
+                    remote_msg = car_link.receive()
+                    if remote_msg:
+                        controller.remote_data = car_link.get_remote_data()
 
-        local_chassis = build_chassis()
-        # In forced-basic mode we deliberately skip dual-link/obstacle/UWB/display layers.
-        chassis = local_chassis
-        vision = build_vision(config)
-        try:
-            import gc
+                now = time.ticks_ms()
+                if time.ticks_diff(now, last_sync) >= getattr(config, "CAR_LINK_SEND_MS", 100):
+                    last_sync = now
+                    car_link.send(build_master_status(controller, pose, chassis, config))
 
-            gc.collect()
-        except Exception:
-            pass
-        print("CONTROLLER: SmartCarController (forced, minimal)")
-        controller = SmartCarController(chassis, vision, config)
-
-        try:
-            from Module.uart_car_link import UartCarLink
-            print("Initializing Seekfree Wireless UART Link...")
-            car_link = UartCarLink(getattr(config, "CAR_LINK_UART_ID", 2), getattr(config, "CAR_LINK_BAUDRATE", 115200))
         except Exception as e:
-            print("Failed to initialize Seekfree Link:", e)
-            car_link = None
+            import sys
 
-        if bool(getattr(config, "BOOT_WAIT_C14_ENABLE", True)):
-            try:
-                from machine import Pin
+            print("CRASH IN UPDATE", repr(e))
+            sys.print_exception(e)
+            raise
+        time.sleep_ms(config.LOOP_DELAY_MS)
 
-                pull_up = getattr(Pin, "PULL_UP_47K", None)
-                if pull_up is not None:
-                    key_pin = Pin(config.NAV_KEY_PIN, Pin.IN, pull_up)
-                else:
-                    key_pin = Pin(config.NAV_KEY_PIN, Pin.IN)
 
-                print("press C14 to start")
-                while key_pin.value() != 0:
-                    time.sleep_ms(20)
-                time.sleep_ms(60)
-                while key_pin.value() == 0:
-                    time.sleep_ms(20)
-                print("C14 start")
-            except Exception:
-                pass
-
-        last_sync = 0
-        while True:
-            try:
-                controller.update()
-                
-                # --- Seekfree Wireless Dual Car Sync ---
-                if car_link:
-                    # 1. 鎺ユ敹鍙︿竴鍙ц溅鐨勭姸鎬?                    if car_link.uart and car_link.uart.any():
-                        remote_msg = car_link.receive()
-                        if remote_msg:
-                            # 濡傛灉闇€瑕佹牴鎹彟涓€鍙ц溅鐨勭姸鎬佸仛鍐崇瓥锛屽彲浠ュ湪鎺у埗鍣ㄩ噷闈㈠鐞?                            controller.remote_data = car_link.get_remote_data()
-                            # debug only
-                            # print("<- Remote:", controller.remote_data)
-                            
-                    # 2. 瀹氭湡鍙戦€佽嚜宸辩殑鐘舵€佸埌鍙︿竴鍙ц溅
-                    now = time.ticks_ms()
-                    if time.ticks_diff(now, last_sync) >= getattr(config, "CAR_LINK_SEND_MS", 100):
-                        last_sync = now
-                        my_status = {
-                            "state": controller.state,
-                            "target_visible": bool(getattr(controller, "_last_frame", {}).get("object"))
-                        }
-                        car_link.send(my_status)
-                        
-            except Exception as e:
-                import sys
-                print("CRASH IN UPDATE", repr(e))
-                sys.print_exception(e)
-                raise
-            time.sleep_ms(config.LOOP_DELAY_MS)
-        return
-
-    # Full competition runtime (heavier).
+def run_full_mode():
     from BSP.board_runtime import MainControl
     from Module.robot_runtime import DisplayLayer, DriveLayer, EstimationLayer, RobotSystem, TaskLayer
+    from Module.task_controller_lidar_push import LidarSmartPushController
 
-    local_chassis = build_chassis()
-    chassis = local_chassis
-    communication = None
+    chassis = build_chassis()
     vision = build_vision(config)
-    obstacle_sensor, ultrasonic = build_obstacle_devices(config)
+    build_obstacle_devices(config)
 
-    controller = None
     control_board = MainControl(config)
     control_board.init()
 
     uwb_pose_source = build_uwb_pose(config)
-
-    system_holder = {"system": None}
-
-    def pose_provider():
-        system = system_holder["system"]
-        if not system:
-            return None
-        return system.estimation.last_pose
-
-    def in_start_zone(pose):
-        if not pose:
-            return False
-        x = float(pose.get("x", 0.0))
-        y = float(pose.get("y", 0.0))
-        return (
-            float(getattr(config, "START_ZONE_X_MIN", 0.0)) <= x <= float(getattr(config, "START_ZONE_X_MAX", 0.5))
-            and float(getattr(config, "START_ZONE_Y_MIN", 0.0)) <= y <= float(getattr(config, "START_ZONE_Y_MAX", 0.5))
-        )
-
-    def remote_home_fn():
-        status = getattr(chassis, "last_status", None)
-        if not status:
-            return False
-        remote_pose = status.get("status", {}).get("pose")
-        return in_start_zone(remote_pose)
-
-    if not force_basic:
-        from Module.task_controller_lidar_push import LidarSmartPushController
-
-        print("CONTROLLER: LidarSmartPushController")
-        controller = LidarSmartPushController(chassis, vision, config)
-
+    controller = LidarSmartPushController(chassis, vision, config)
     system = RobotSystem(
         control_board,
         DriveLayer(chassis, control_board),
@@ -236,7 +257,7 @@ def main():
         display_layer=DisplayLayer(control_board),
         communication_layer=None,
     )
-    system_holder["system"] = system
+    car_link = build_car_link(config)
 
     if bool(getattr(config, "BOOT_WAIT_C14_ENABLE", True)):
         print("press C14 to start")
@@ -250,6 +271,8 @@ def main():
     allow_toggle = bool(getattr(config, "RUNTIME_C14_TOGGLE_ENABLE", True))
     running = True
     key_was_pressed = False
+    last_sync = 0
+    pose_print_ms = {"value": 0}
     print("competition mode start")
 
     try:
@@ -268,7 +291,19 @@ def main():
 
             if control_board and control_board.ticker.ready():
                 if running:
-                    system.step()
+                    pose = system.step()
+                    maybe_print_pose("MASTER", pose, pose_print_ms, config)
+
+                    if car_link:
+                        if car_link.uart and car_link.uart.any():
+                            remote_msg = car_link.receive()
+                            if remote_msg:
+                                controller.remote_data = car_link.get_remote_data()
+
+                        now = time.ticks_ms()
+                        if time.ticks_diff(now, last_sync) >= getattr(config, "CAR_LINK_SEND_MS", 100):
+                            last_sync = now
+                            car_link.send(build_master_status(controller, pose, chassis, config))
                 else:
                     if system.display:
                         system.display.update(system.estimation.last_pose, chassis)
@@ -276,6 +311,18 @@ def main():
                 time.sleep_ms(1)
     finally:
         chassis.stop()
+
+
+def main():
+    try:
+        print("competition: build=2026-04-16 dual-coop")
+    except Exception:
+        pass
+
+    if bool(getattr(config, "COMPETITION_FORCE_BASIC_CONTROLLER", False)):
+        run_basic_mode()
+        return
+    run_full_mode()
 
 
 if __name__ == "__main__":

@@ -11,7 +11,15 @@
 # - single
 # - competition
 # - dual_slave
-APP_PROFILE = "competition"
+APP_PROFILE = "test_uwb_two_anchor"
+
+# Vehicle preset switch:
+# - master_test
+# - slave_test
+# - master_competition
+# - slave_competition
+# - manual (disable preset override)
+VEHICLE_PRESET = "master_test"
 
 # --- 实际主控硬件引脚定义 ---
 # 4 路电机驱动，使用 PWM + DIR 方式�?
@@ -191,10 +199,11 @@ CAR_LINK_TEST_ROLE = "master"
 
 # 主车也回传自身状态（用于双向位姿共享�?
 CAR_LINK_MASTER_STATUS_MS = 120
+CAR_LINK_ROLE = "master"
 
 # --- UWB(DW3000) 位姿输入（可选） ---
 # 若你�?DW3000 定位模块能通过串口输出位姿，可启用此项让系统直接使�?UWB 位姿�?
-UWB_POSE_ENABLE = False
+UWB_POSE_ENABLE = True
 UWB_UART_ID = 5
 UWB_BAUDRATE = 115200
 UWB_TX_PIN = "D20"
@@ -208,11 +217,36 @@ UWB_POSE_FORMAT = "csv"
 # �?UWB 超过该时间未更新，则不再覆盖里程计（ms�?
 UWB_POSE_MAX_AGE_MS = 250
 
+# --- Two-anchor UWB test defaults ---
+# Used by APP/test_uwb_two_anchor_localization.py only.
+UWB_ANCHOR_0_ID = 0
+UWB_ANCHOR_0_X_M = 0.0
+UWB_ANCHOR_0_Y_M = 0.0
+UWB_ANCHOR_1_ID = 1
+UWB_ANCHOR_1_X_M = 3.2
+UWB_ANCHOR_1_Y_M = 0.0
+UWB_RANGE_MAX_AGE_MS = 350
+UWB_TWO_ANCHOR_INTERSECTION_TOL_M = 0.12
+UWB_TWO_ANCHOR_PREFERRED_SIDE = 1
+UWB_TAG_OFFSET_FORWARD_M = 0.0
+UWB_TAG_OFFSET_LATERAL_M = 0.0
+UWB_RANGE_POLL_ENABLE = True
+UWB_RANGE_POLL_MS = 120
+UWB_RANGE_CMD_TEMPLATE = "AT+DISTANCE\r\n"
+UWB_TWO_ANCHOR_PRINT_MS = 200
+UWB_TWO_ANCHOR_INIT_ENABLE = True
+UWB_TWO_ANCHOR_INIT_X_M = 0.25
+UWB_TWO_ANCHOR_INIT_Y_M = 0.25
+UWB_TWO_ANCHOR_INIT_YAW_DEG = 0.0
+UWB_TWO_ANCHOR_USE_IMU = False
+
 # 副车相对主车的横向偏置�?
 # 并排推时，副车在主车右侧可设为正值，在左侧设为负值�?
 SLAVE_LATERAL_BIAS = 18
 SLAVE_ROTATE_SCALE = 1.0
 SLAVE_SPEED_SCALE = 1.0
+DUAL_COORD_PRINT_ENABLE = True
+DUAL_COORD_PRINT_MS = 250
 
 # 视觉协议中的目标�?
 OBJECT_LABEL = "object"
@@ -406,7 +440,7 @@ AVOID_ACTION_MS = 450
 OBJECT_LOCK_SIZE = 55        # 目标太小时优先继续追踪，不强制避障绕�?
 
 # --- 比赛流程控制参数（双车协�?+ 回发车区�?---
-COMPETITION_DUAL_ENABLE = False
+COMPETITION_DUAL_ENABLE = True
 
 # 临时止血：competition 控制器初始化在某些固件上会触�?ValueError(expected 4)�?
 # lidar 模式建议关闭该开关，以启�?CompetitionController 的“无 zone 直推”逻辑�?
@@ -454,9 +488,20 @@ COOP_SLAVE_PUSH_ALLOW_VX_MAX = 28
 # 队形保持：目标是让副车相对主车保持固定横向偏置（米）
 # 正值代表“副车在主车右侧”，负值代表“副车在主车左侧”（以主车朝向坐标系为准�?
 COOP_FORMATION_ENABLE = True
+COOP_FORMATION_FORWARD_OFFSET_M = 0.00
 COOP_FORMATION_LATERAL_OFFSET_M = 0.35
 COOP_FORMATION_KP_VY = 80.0
 COOP_FORMATION_MAX_VY = 15
+SLAVE_POSITION_KP_VX = 90.0
+SLAVE_YAW_KP = 1.3
+SLAVE_FEEDFORWARD_SCALE = 0.85
+SLAVE_FOLLOW_MAX_VX = 35
+SLAVE_FOLLOW_MAX_VY = 35
+SLAVE_FOLLOW_MAX_VW = 28
+SLAVE_TARGET_DEADBAND_M = 0.03
+SLAVE_YAW_DEADBAND_DEG = 4.0
+SLAVE_MAX_MASTER_AGE_MS = 400
+LCD_POSE_TEXT_MS = 120
 
 # 多物体清场结束判定：连续未看到目标达到该时间，判定“场上已清空�?
 MISSION_EMPTY_CONFIRM_MS = 5000
@@ -471,3 +516,14 @@ PUSH_LOST_CONFIRM_FRAMES = 2
 
 # 任务结束前，主从都在发车区内持续稳定时间（毫秒）
 MISSION_RETURN_STABLE_MS = 1200
+
+
+try:
+	from Module.vehicle_config_presets import apply_preset as _apply_vehicle_preset
+
+	_apply_vehicle_preset(globals(), globals().get("VEHICLE_PRESET", "manual"))
+except Exception as _vehicle_preset_error:
+	try:
+		print("vehicle preset skipped:", _vehicle_preset_error)
+	except Exception:
+		pass

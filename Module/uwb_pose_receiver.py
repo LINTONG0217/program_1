@@ -20,10 +20,23 @@ from machine import Pin, UART
 class UWBPoseReceiver:
 	def __init__(self, uart_id, baudrate, tx_pin=None, rx_pin=None, fmt="csv"):
 		self.fmt = str(fmt or "csv").strip().lower()
+		def _pin_value(pin):
+			if pin is None:
+				return None
+			try:
+				return int(pin)
+			except Exception:
+				return pin
+
 		if tx_pin is None and rx_pin is None:
 			self.uart = UART(uart_id, baudrate=baudrate)
 		else:
-			self.uart = UART(uart_id, baudrate=baudrate, tx=Pin(int(tx_pin)), rx=Pin(int(rx_pin)))
+			self.uart = UART(
+				uart_id,
+				baudrate=baudrate,
+				tx=Pin(_pin_value(tx_pin)),
+				rx=Pin(_pin_value(rx_pin)),
+			)
 
 		self.last_pose = None
 		self.last_pose_ms = None

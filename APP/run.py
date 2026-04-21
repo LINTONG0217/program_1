@@ -61,4 +61,13 @@ def run_profile(profile):
 
         return main()
 
-    raise ValueError("unsupported APP_PROFILE: {} (supported: single/test_chassis/test_straight/competition/dual_slave)".format(p))
+    if p in ("test_uwb_two_anchor", "uwb_two_anchor", "two_anchor_localization"):
+        from APP.test_uwb_two_anchor_localization import main
+
+        return main()
+
+    raise ValueError(
+        "unsupported APP_PROFILE: {} (supported: single/test_chassis/test_straight/competition/dual_slave/test_uwb_two_anchor)".format(
+            p
+        )
+    )

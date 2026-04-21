@@ -62,6 +62,8 @@ class EstimationLayer:
 						self.last_pose["x"] = x
 						self.last_pose["y"] = y
 						self.last_pose["yaw"] = yaw
+						if ts is not None:
+							self.last_pose["ts"] = int(ts)
 					except Exception:
 						pass
 		return self.last_pose

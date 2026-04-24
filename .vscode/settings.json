@@ -2,7 +2,7 @@
     "python.defaultInterpreterPath": "c:/Users/LINTONG/Desktop/智能车/program_1/.venv/bin/python.exe",
     "python.autoComplete.extraPaths": [
         "${workspaceFolder}/typings",
-        "c:/Users/LINTONG/.vscode/extensions/rt-thread.rt-thread-micropython-1.0.11/microExamples/code-completion"
+        "/Users/lintong/.vscode/extensions/rt-thread.rt-thread-micropython-1.0.11/microExamples/code-completion"
     ],
     "python.analysis.stubPath": "${workspaceFolder}/typings",
     "python.analysis.extraPaths": [

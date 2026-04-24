@@ -116,8 +116,14 @@ class SlaveSideFollower:
         return pose
 
     def _target_pose(self, master_pose):
-        lateral = float(getattr(self.cfg, "COOP_FORMATION_LATERAL_OFFSET_M", 0.35))
-        forward = float(getattr(self.cfg, "COOP_FORMATION_FORWARD_OFFSET_M", 0.0))
+        payload = self.last_master if isinstance(self.last_master, dict) else {}
+        coop_push = bool(payload.get("coop_push_active", False))
+        if coop_push:
+            lateral = float(getattr(self.cfg, "COOP_PUSH_LATERAL_OFFSET_M", getattr(self.cfg, "COOP_FORMATION_LATERAL_OFFSET_M", 0.35)))
+            forward = float(getattr(self.cfg, "COOP_PUSH_FORWARD_OFFSET_M", getattr(self.cfg, "COOP_FORMATION_FORWARD_OFFSET_M", 0.0)))
+        else:
+            lateral = float(getattr(self.cfg, "COOP_FORMATION_LATERAL_OFFSET_M", 0.35))
+            forward = float(getattr(self.cfg, "COOP_FORMATION_FORWARD_OFFSET_M", 0.0))
         dx, dy = body_to_world(float(master_pose.get("yaw", 0.0)), forward, lateral)
         target = {
             "x": float(master_pose.get("x", 0.0)) + dx,

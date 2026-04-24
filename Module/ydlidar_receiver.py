@@ -114,6 +114,7 @@ class YDLidarReceiver:
 			self._try_start_scan()
 		self._buf = bytearray()
 		self.last_frame = None
+		self.last_scan = None
 		self.last_update_ms = time.ticks_ms()
 
 	def _uart_write(self, payload):
@@ -514,26 +515,26 @@ class YDLidarReceiver:
 		}
 
 	def _parse_available(self):
-		"""从串口读取并解析，返回 (has_packet, nearest_dict_or_None)。"""
+		"""从串口读取并解析，返回 (has_packet, nearest_dict_or_None, scan_dict_or_None)。"""
 		any_fn = getattr(self.uart, "any", None)
 		read_fn = getattr(self.uart, "read", None)
 		if not callable(any_fn) or not callable(read_fn):
-			return False, None
+			return False, None, None
 
 		try:
 			n = any_fn()
 		except Exception:
-			return False, None
+			return False, None, None
 
 		if not n or n <= 0:
-			return False, None
+			return False, None, None
 
 		try:
 			chunk = read_fn(n)
 		except Exception:
 			chunk = None
 		if not chunk:
-			return False, None
+			return False, None, None
 
 		if isinstance(chunk, str):
 			chunk = chunk.encode("latin1")
@@ -545,6 +546,7 @@ class YDLidarReceiver:
 
 		has_packet = False
 		nearest = None
+		scan_points = []
 
 		while True:
 			if len(self._buf) < 10:
@@ -601,16 +603,30 @@ class YDLidarReceiver:
 				if not self._in_front_window(ang):
 					continue
 
+				scan_points.append({
+					"distance_mm": dist_mm,
+					"angle_deg": ang,
+				})
+
 				if nearest is None or dist_mm < nearest["distance_mm"]:
 					nearest = {
 						"distance_mm": dist_mm,
 						"angle_deg": ang,
 					}
 
-		return has_packet, nearest
+		scan = None
+		if has_packet:
+			scan = {
+				"points": scan_points,
+				"count": len(scan_points),
+				"front_min_deg": self.front_min_deg,
+				"front_max_deg": self.front_max_deg,
+			}
+
+		return has_packet, nearest, scan
 
 	def read_frame(self):
-		has_packet, nearest = self._parse_available()
+		has_packet, nearest, scan = self._parse_available()
 		if not has_packet:
 			return None
 
@@ -627,8 +643,20 @@ class YDLidarReceiver:
 		}
 
 		self.last_frame = frame
+		if scan is not None:
+			scan["ts"] = now
+			self.last_scan = scan
 		self.last_update_ms = now
 		return frame
+
+	def get_latest_scan(self, timeout_ms=300):
+		self.read_frame()
+		if not self.last_scan:
+			return None
+		age_ms = time.ticks_diff(time.ticks_ms(), self.last_update_ms)
+		if age_ms > int(timeout_ms):
+			return None
+		return self.last_scan
 
 	def get_latest_frame(self, timeout_ms=500):
 		frame = self.read_frame()

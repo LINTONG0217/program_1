@@ -25,10 +25,17 @@
 - Module：强调“算法职责”，例如 `pose_estimation`、`imu_attitude_fusion`
 - APP：强调“业务场景”，例如 `single`、`competition`、`dual_slave`
 
-## 兼容策略
+## 当前状态
 
-当前采用“新文件名 + 兼容映射”的重构方式：
+当前仓库已经完成一轮物理裁剪：
 
-- 旧代码不立即删除，避免一次性改动过大导致不可运行。
-- 新开发统一在 BSP/Module/APP 三层文件进行。
-- 稳定后可再做第二阶段：把旧文件迁入 legacy 并物理裁剪。
+- 已移除旧的 OpenART 摄像机兼容空壳与旧调试入口
+- 主线开发集中在当前仍保留的 BSP / Module / APP 文件
+- 历史映射仅保留在 `legacy/compatibility_map.md` 供追溯
+
+当前建议使用的 APP 入口：
+
+- `APP/single.py`
+- `APP/competition.py`
+- `APP/dual_slave.py`
+- `APP/test_uwb_two_anchor_localization.py`

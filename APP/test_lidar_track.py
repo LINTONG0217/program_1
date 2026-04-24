@@ -60,12 +60,22 @@ def main():
         while True:
             now = time.ticks_ms()
             frame = rx.read_frame()
-            
             obj = None
             if isinstance(frame, dict):
                 obj = frame.get("object")
 
+            # 卡尔曼滤波增强：丢帧时用上一次目标的预测
+            if obj is None and hasattr(rx, "last_obj_kf"):
+                rx.last_obj_kf.predict()
+                kx, ky, kvx, kvy = rx.last_obj_kf.get_state()
+                obj = {"distance_mm": kx, "angle_deg": ky, "size": 30}  # 这里假设distance/angle可用
+
             if obj:
+                # 初始化/更新卡尔曼
+                if not hasattr(rx, "last_obj_kf"):
+                    from Module.lidar_grid_navigation import KalmanFilter2D
+                    rx.last_obj_kf = KalmanFilter2D(obj.get("distance_mm", 0), obj.get("angle_deg", 0))
+                rx.last_obj_kf.update(obj.get("distance_mm", 0), obj.get("angle_deg", 0))
                 # 提取雷达解算后的球的参数
                 distance = obj.get("distance_mm", 0)
                 angle = obj.get("angle_deg", 0)

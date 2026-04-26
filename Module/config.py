@@ -11,7 +11,7 @@
 # - single
 # - competition
 # - dual_slave
-APP_PROFILE = "test_uwb_two_anchor"
+APP_PROFILE = "test_lidar_track"
 
 # Vehicle preset switch:
 # - master_test
@@ -19,7 +19,7 @@ APP_PROFILE = "test_uwb_two_anchor"
 # - master_competition
 # - slave_competition
 # - manual (disable preset override)
-VEHICLE_PRESET = "master_test"
+VEHICLE_PRESET = "manual"
 
 # --- 实际主控硬件引脚定义 ---
 # 4 路电机驱动，使用 PWM + DIR 方式�?
@@ -47,6 +47,16 @@ TEST_WAIT_C14_ENABLE = True
 # 运行期按 C14 切换：运�?<-> 暂停（暂停时底盘 stop�?
 RUNTIME_C14_TOGGLE_ENABLE = True
 TEST_RUNTIME_C14_TOGGLE_ENABLE = True
+MOTOR_OUTPUT_ENABLE = True
+MOTOR_SPEED_LIMIT_PERCENT = 25
+MOTOR_MAX_SPEED_STEP_PERCENT = 4
+MOTOR_DIRECT_DUTY_LIMIT = 2500
+TEST_CHASSIS_DIRECT_DUTY = 1000
+TEST_CHASSIS_MOTOR_DURATION_MS = 2000
+TEST_CHASSIS_STEP_GAP_MS = 1000
+TEST_CHASSIS_MOVE_SPEED = 15
+TEST_CHASSIS_ROTATE_SPEED = 12
+TEST_CHASSIS_MOVE_DURATION_MS = 2000
 LCD_CS_PIN = "B29"
 LCD_RST_PIN = "B31"
 LCD_DC_PIN = "B5"
@@ -56,10 +66,10 @@ CONTROL_PERIOD_MS = 10
 
 # --- 硬件标定 / 方向修正 ---
 MOTOR_REVERSE = {
-	"fl": False,
-	"fr": True,
-	"bl": False,
-	"br": True,
+	"fl": True,
+	"fr": False,
+	"bl": True,
+	"br": False,
 }
 ENCODER_REVERSE = {
 	"fl": False,
@@ -68,6 +78,13 @@ ENCODER_REVERSE = {
 	"br": False,
 }
 ENCODER_CPR = 1024
+MOTOR_GEAR_RATIO = 100.0
+ENCODER_MOTOR_CPR = ENCODER_CPR
+ENCODER_OUTPUT_CPR = ENCODER_MOTOR_CPR * MOTOR_GEAR_RATIO
+# Set the real wheel diameter and enable DERIVE_ODOM_SCALE_FROM_MOTOR when
+# encoder counts are measured on the motor shaft and should include gearbox ratio.
+WHEEL_DIAMETER_M = 0.06
+DERIVE_ODOM_SCALE_FROM_MOTOR = False
 IMU_GYRO_SCALE = 1.0
 IMU_MAG_SCALE = 1.0
 GYRO_RAW_TO_DPS = 0.07
@@ -79,7 +96,9 @@ GYRO_CALIBRATION_SAMPLES = 100
 # - 若串口只停在某行不动，可先把 IMU/LCD 暂时关掉确认是否被初始化阻塞�?
 IMU_CALIBRATION_ENABLE = True
 LCD_ENABLE = True
-PULSE_PER_METER = 2387.32414637843
+PULSE_PER_METER_CALIBRATED = 2387.32414637843
+PULSE_PER_METER_DERIVED = ENCODER_OUTPUT_CPR / (3.141592653589793 * WHEEL_DIAMETER_M)
+PULSE_PER_METER = PULSE_PER_METER_DERIVED if DERIVE_ODOM_SCALE_FROM_MOTOR else PULSE_PER_METER_CALIBRATED
 IMU_FUSION_Q_ANGLE = 0.001
 IMU_FUSION_Q_GYRO = 0.003
 IMU_FUSION_R_ANGLE = 0.03
@@ -133,10 +152,10 @@ FRAME_WIDTH = 320
 FRAME_HEIGHT = 240
 
 # --- YDLIDAR T-MINI PLUS 配置 ---
-LIDAR_UART_ID = 5
+LIDAR_UART_ID = 7
 LIDAR_BAUDRATE = 230400
-LIDAR_TX_PIN = 4
-LIDAR_RX_PIN = 5
+LIDAR_TX_PIN = "D22"
+LIDAR_RX_PIN = "D23"
 
 # 启动扫描：部�?YDLIDAR（含 T-MINI PLUS）需要主控发送指令后才开始持续输�?AA 55 扫描包�?
 # - STOP: A5 65
@@ -148,20 +167,35 @@ LIDAR_START_DELAY_MS = 120
 # UART 兼容/探测�?
 # - �?sys.platform == "mimxrt"（常�?OpenMV/OpenART 风格固件）上，UART 往往不支持传 tx/rx，且 UART 号可能不�?5�?
 # - 开�?AUTO_FALLBACK 后会尝试多个 UART id，并通过 PROBE_MS 选取“真的在收数据”的那一路�?
-LIDAR_UART_AUTO_FALLBACK = True
+LIDAR_UART_AUTO_FALLBACK = False
 LIDAR_UART_PROBE_MS = 150
 
 # 雷达角度窗口（单位：度，前方�?0，左正右负）
-LIDAR_FRONT_MIN_DEG = -45
-LIDAR_FRONT_MAX_DEG = 45
+LIDAR_FRONT_MIN_DEG = 25
+LIDAR_FRONT_MAX_DEG = 65
+LIDAR_IGNORE_ANGLE_RANGES = ((25, 31), (59, 65))
 
 # 雷达安装修正
 LIDAR_ANGLE_OFFSET_DEG = 0.0
 LIDAR_ANGLE_SIGN = 1.0
 
 # 有效测距区间（mm�?
-LIDAR_MIN_DISTANCE_MM = 90
-LIDAR_MAX_DISTANCE_MM = 3200
+LIDAR_MIN_DISTANCE_MM = 40
+LIDAR_MAX_DISTANCE_MM = 700
+LIDAR_TRACK_TARGET_DISTANCE_MM = 80
+LIDAR_TRACK_DISTANCE_DEADBAND_MM = 55
+LIDAR_TRACK_MIN_SIZE = 90
+LIDAR_TRACK_CENTER_DEG = 45.0
+LIDAR_TRACK_ANGLE_DEADBAND_DEG = 3.0
+LIDAR_TRACK_ALIGN_FIRST_DEG = 8.0
+LIDAR_TRACK_VX = 16
+LIDAR_TRACK_REVERSE_VX = 0
+LIDAR_TRACK_VY_PER_DEG = 2.2
+LIDAR_TRACK_MAX_VY = 20
+LIDAR_TRACK_SEARCH_VW = 10
+LIDAR_TRACK_LOOP_MS = 20
+LIDAR_TRACK_FILTER_ALPHA = 0.35
+LIDAR_TRACK_HOLD_MS = 450
 
 # 将角度映射为控制器使用的 offset_x（像素等效量�?
 LIDAR_OFFSET_X_PER_DEG = 4.0
@@ -171,6 +205,7 @@ LIDAR_SIZE_SCALE = 60000.0
 LIDAR_SIZE_MAX = 420
 LIDAR_HOLD_MS = 120
 LIDAR_SCAN_TIMEOUT_MS = 260
+LIDAR_KEEP_SCAN_POINTS = False
 
 # --- 雷达栅格建图 / A* ---
 LIDAR_GRID_WIDTH_M = 2.4
@@ -225,9 +260,11 @@ PUSH_REQUIRE_TARGET = False
 # - label=red,conf=0.92
 # - class=green,score=0.87
 # - red
-OPENART_MINI_ENABLE = False
-OPENART_MINI_UART_ID = 4
+OPENART_MINI_ENABLE = True
+OPENART_MINI_UART_ID = 5
 OPENART_MINI_BAUDRATE = 115200
+OPENART_MINI_TX_PIN = "D20"
+OPENART_MINI_RX_PIN = "D21"
 OPENART_MINI_TIMEOUT_MS = 900
 OPENART_RECOGNIZE_DISTANCE_M = 0.42
 OPENART_EDGE_PUSH_TIME_MS = 1500
@@ -286,10 +323,10 @@ CAR_LINK_ROLE = "master"
 # --- UWB(DW3000) 位姿输入（可选） ---
 # 若你�?DW3000 定位模块能通过串口输出位姿，可启用此项让系统直接使�?UWB 位姿�?
 UWB_POSE_ENABLE = True
-UWB_UART_ID = 5
+UWB_UART_ID = 4
 UWB_BAUDRATE = 115200
-UWB_TX_PIN = "D20"
-UWB_RX_PIN = "D21"
+UWB_TX_PIN = "D0"
+UWB_RX_PIN = "D1"
 
 # 输出格式�?
 # - "csv": 形如 "x,y,yaw\n"（单位：�?�?度）
@@ -315,6 +352,7 @@ UWB_TAG_OFFSET_LATERAL_M = 0.0
 UWB_RANGE_POLL_ENABLE = True
 UWB_RANGE_POLL_MS = 100
 UWB_RANGE_CMD_TEMPLATE = "AT+DISTANCE\r\n"
+UWB_TWO_ANCHOR_LIDAR_ENABLE = False
 UWB_TWO_ANCHOR_PRINT_MS = 200
 UWB_TWO_ANCHOR_INIT_ENABLE = True
 UWB_TWO_ANCHOR_INIT_X_M = 0.25
@@ -457,6 +495,7 @@ LCD_SPEED_TO_CELL = 0.0025
 
 # --- 工程化底盘控制参�?---
 CHASSIS_CMD_DEADBAND = 3
+CHASSIS_VY_SIGN = -1
 CHASSIS_MAX_VX_STEP = 8
 CHASSIS_MAX_VY_STEP = 8
 CHASSIS_MAX_VW_STEP = 10
@@ -491,7 +530,9 @@ CHASSIS_DEBUG_PRINT_ENABLE = False
 CHASSIS_DEBUG_PRINT_MS = 200
 
 # --- 里程�?/ 状态估计参�?---
-ODOM_LINEAR_SCALE = 0.0012
+ODOM_LINEAR_SCALE_CALIBRATED = 0.0012
+ODOM_LINEAR_SCALE_DERIVED = 1.0 / PULSE_PER_METER
+ODOM_LINEAR_SCALE = ODOM_LINEAR_SCALE_DERIVED if DERIVE_ODOM_SCALE_FROM_MOTOR else ODOM_LINEAR_SCALE_CALIBRATED
 ODOM_ANGULAR_SCALE = 0.0008
 ODOM_GYRO_BLEND = 0.65
 POSE_MAX_DT_MS = 100

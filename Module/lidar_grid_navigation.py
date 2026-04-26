@@ -435,15 +435,26 @@ class OpenArtMiniReceiver:
 
 	def _create_uart(self):
 		try:
-			from machine import UART
+			from machine import Pin, UART
 		except Exception:
 			try:
 				import pyb  # type: ignore
+				Pin = None
 				UART = pyb.UART
 			except Exception:
 				return None
 		uart_id = int(getattr(self.cfg, "OPENART_MINI_UART_ID", 4))
 		baudrate = int(getattr(self.cfg, "OPENART_MINI_BAUDRATE", 115200))
+		tx_pin = getattr(self.cfg, "OPENART_MINI_TX_PIN", None)
+		rx_pin = getattr(self.cfg, "OPENART_MINI_RX_PIN", None)
+		if tx_pin is not None and rx_pin is not None and Pin is not None:
+			try:
+				return UART(uart_id, baudrate=baudrate, tx=Pin(tx_pin), rx=Pin(rx_pin))
+			except Exception:
+				try:
+					return UART(uart_id, baudrate, tx=Pin(tx_pin), rx=Pin(rx_pin))
+				except Exception:
+					pass
 		try:
 			return UART(uart_id, baudrate)
 		except Exception:

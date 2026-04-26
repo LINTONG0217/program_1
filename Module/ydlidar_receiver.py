@@ -81,6 +81,7 @@ class YDLidarReceiver:
 
 		self.front_min_deg = float(getattr(config, "LIDAR_FRONT_MIN_DEG", -70.0))
 		self.front_max_deg = float(getattr(config, "LIDAR_FRONT_MAX_DEG", 70.0))
+		self.ignore_angle_ranges = getattr(config, "LIDAR_IGNORE_ANGLE_RANGES", ())
 		self.min_dist_mm = float(getattr(config, "LIDAR_MIN_DISTANCE_MM", 90.0))
 		self.max_dist_mm = float(getattr(config, "LIDAR_MAX_DISTANCE_MM", 3500.0))
 		self.angle_offset_deg = float(getattr(config, "LIDAR_ANGLE_OFFSET_DEG", 0.0))
@@ -89,6 +90,7 @@ class YDLidarReceiver:
 		self.size_scale = float(getattr(config, "LIDAR_SIZE_SCALE", 60000.0))
 		self.size_max = int(getattr(config, "LIDAR_SIZE_MAX", 420))
 		self.hold_ms = int(getattr(config, "LIDAR_HOLD_MS", 120))
+		self.keep_scan_points = bool(getattr(config, "LIDAR_KEEP_SCAN_POINTS", False))
 
 		try:
 			self.send_start_cmd = bool(getattr(config, "LIDAR_SEND_START_CMD", True))
@@ -475,9 +477,35 @@ class YDLidarReceiver:
 		mn = self.front_min_deg
 		mx = self.front_max_deg
 		if mn <= mx:
-			return mn <= ang_deg <= mx
+			if not (mn <= ang_deg <= mx):
+				return False
+			for item in self.ignore_angle_ranges or ():
+				try:
+					lo = float(item[0])
+					hi = float(item[1])
+				except Exception:
+					continue
+				if lo <= hi:
+					if lo <= ang_deg <= hi:
+						return False
+				elif ang_deg >= lo or ang_deg <= hi:
+					return False
+			return True
 		# 支持跨 -180/180 的窗口
-		return ang_deg >= mn or ang_deg <= mx
+		if not (ang_deg >= mn or ang_deg <= mx):
+			return False
+		for item in self.ignore_angle_ranges or ():
+			try:
+				lo = float(item[0])
+				hi = float(item[1])
+			except Exception:
+				continue
+			if lo <= hi:
+				if lo <= ang_deg <= hi:
+					return False
+			elif ang_deg >= lo or ang_deg <= hi:
+				return False
+		return True
 
 	def _angle_to_offset_x(self, ang_deg):
 		off = int(ang_deg * self.offset_x_per_deg)
@@ -541,18 +569,21 @@ class YDLidarReceiver:
 		self._buf.extend(chunk)
 
 		# 防止异常情况下缓冲无限增长
-		if len(self._buf) > 8192:
-			self._buf = self._buf[-4096:]
+		if len(self._buf) > 2048:
+			self._buf = self._buf[-1024:]
 
 		has_packet = False
 		nearest = None
-		scan_points = []
+		scan_points = [] if self.keep_scan_points else None
 
 		while True:
 			if len(self._buf) < 10:
 				break
 
-			idx = bytes(self._buf).find(b"\xAA\x55")
+			try:
+				idx = self._buf.find(b"\xAA\x55")
+			except Exception:
+				idx = bytes(self._buf).find(b"\xAA\x55")
 			if idx < 0:
 				# 只保留最后1字节，避免切断包头
 				if len(self._buf) > 1:
@@ -603,10 +634,11 @@ class YDLidarReceiver:
 				if not self._in_front_window(ang):
 					continue
 
-				scan_points.append({
-					"distance_mm": dist_mm,
-					"angle_deg": ang,
-				})
+				if scan_points is not None:
+					scan_points.append({
+						"distance_mm": dist_mm,
+						"angle_deg": ang,
+					})
 
 				if nearest is None or dist_mm < nearest["distance_mm"]:
 					nearest = {
@@ -615,10 +647,10 @@ class YDLidarReceiver:
 					}
 
 		scan = None
-		if has_packet:
+		if has_packet and self.keep_scan_points:
 			scan = {
 				"points": scan_points,
-				"count": len(scan_points),
+				"count": len(scan_points) if scan_points is not None else 0,
 				"front_min_deg": self.front_min_deg,
 				"front_max_deg": self.front_max_deg,
 			}

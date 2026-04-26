@@ -27,7 +27,7 @@ def _common_two_anchor():
 		"UWB_RANGE_POLL_ENABLE": True,
 		"UWB_RANGE_POLL_MS": 120,
 		"UWB_RANGE_CMD_TEMPLATE": "AT+DISTANCE\r\n",
-		"UWB_TWO_ANCHOR_USE_IMU": False,
+		"UWB_TWO_ANCHOR_USE_IMU": True,
 	}
 
 

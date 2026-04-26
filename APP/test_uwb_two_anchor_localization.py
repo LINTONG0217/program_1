@@ -219,6 +219,40 @@ def build_car_link():
 		return None
 
 
+def _print_uwb_startup_diagnostics():
+	uwb_uart_id = getattr(config, "UWB_UART_ID", None)
+	lidar_uart_id = getattr(config, "LIDAR_UART_ID", None)
+	lidar_enable = bool(getattr(config, "UWB_TWO_ANCHOR_LIDAR_ENABLE", False))
+	if lidar_enable and uwb_uart_id is not None and lidar_uart_id is not None:
+		try:
+			if int(uwb_uart_id) == int(lidar_uart_id):
+				print(
+					"[WARN] UWB and lidar both use UART{}; lidar init may remap or occupy the same UART and make UWB unreadable.".format(
+						int(uwb_uart_id)
+					)
+				)
+				print(
+					"[WARN] UWB pins=({}, {}), lidar pins=({}, {})".format(
+						getattr(config, "UWB_TX_PIN", None),
+						getattr(config, "UWB_RX_PIN", None),
+						getattr(config, "LIDAR_TX_PIN", None),
+						getattr(config, "LIDAR_RX_PIN", None),
+					)
+				)
+		except Exception:
+			pass
+
+	poll_enable = bool(getattr(config, "UWB_RANGE_POLL_ENABLE", False))
+	cmd = str(getattr(config, "UWB_RANGE_CMD_TEMPLATE", "") or "")
+	if poll_enable and cmd and "{id}" not in cmd:
+		print(
+			"[WARN] UWB_RANGE_CMD_TEMPLATE has no {id}; replies without anchor_id will be guessed as alternating anchor 0/1."
+		)
+		print(
+			"[WARN] For two-anchor localization, prefer a command/output that carries anchor id explicitly."
+		)
+
+
 def main():
 	print("test: two-anchor uwb + lidar grid + astar + openart push")
 	print(
@@ -238,8 +272,10 @@ def main():
 			float(getattr(config, "LIDAR_GRID_RESOLUTION_M", 0.08)),
 		)
 	)
+	print("lidar enabled: {}".format(bool(getattr(config, "UWB_TWO_ANCHOR_LIDAR_ENABLE", False))))
 	print("openart mini enabled: {}".format(bool(getattr(config, "OPENART_MINI_ENABLE", False))))
 	print("imu yaw fusion enabled: {}".format(bool(getattr(config, "UWB_TWO_ANCHOR_USE_IMU", False))))
+	_print_uwb_startup_diagnostics()
 
 	control_board = MainControl(config)
 	control_board.init()
@@ -257,16 +293,23 @@ def main():
 
 	uwb_receiver = UWBRangeReceiver(config)
 	uwb_solver = TwoAnchorPoseSolver(config)
-	lidar = YDLidarReceiver(
-		uart_id=getattr(config, "LIDAR_UART_ID", 5),
-		baudrate=getattr(config, "LIDAR_BAUDRATE", 230400),
-		tx_pin=getattr(config, "LIDAR_TX_PIN", 4),
-		rx_pin=getattr(config, "LIDAR_RX_PIN", 5),
-		config=config,
-	)
-	planner = LocalOccupancyAStar(config)
-	tracker = MatchObjectTracker(config)
-	follower = PathFollower(config)
+	lidar_enable = bool(getattr(config, "UWB_TWO_ANCHOR_LIDAR_ENABLE", False))
+	if lidar_enable:
+		lidar = YDLidarReceiver(
+			uart_id=getattr(config, "LIDAR_UART_ID", 5),
+			baudrate=getattr(config, "LIDAR_BAUDRATE", 230400),
+			tx_pin=getattr(config, "LIDAR_TX_PIN", 4),
+			rx_pin=getattr(config, "LIDAR_RX_PIN", 5),
+			config=config,
+		)
+		planner = LocalOccupancyAStar(config)
+		tracker = MatchObjectTracker(config)
+		follower = PathFollower(config)
+	else:
+		lidar = None
+		planner = None
+		tracker = None
+		follower = None
 	openart = OpenArtMiniReceiver(config)
 	car_link = build_car_link()
 
@@ -605,6 +648,18 @@ def main():
 					_format_range(int(getattr(config, "UWB_ANCHOR_0_ID", 0)), fresh_ranges),
 					_format_range(int(getattr(config, "UWB_ANCHOR_1_ID", 1)), fresh_ranges),
 				)
+				last_rx_ms = getattr(uwb_receiver, "last_rx_ms", None)
+				if last_rx_ms is None:
+					uwb_diag = "uwb_rx=never"
+				else:
+					uwb_diag = "uwb_age={}ms".format(time.ticks_diff(now_ms, last_rx_ms))
+				if not fresh_ranges:
+					last_poll_cmd = getattr(uwb_receiver, "last_poll_cmd", None)
+					last_line = getattr(uwb_receiver, "last_line", None)
+					if last_poll_cmd:
+						uwb_diag += ' poll="{}"'.format(str(last_poll_cmd).strip())
+					if last_line:
+						uwb_diag += ' raw="{}"'.format(str(last_line)[:48])
 				if last_recognition:
 					rec_text = "rec={} conf={:.2f}".format(
 						str(last_recognition.get("label")),
@@ -625,6 +680,7 @@ def main():
 						int(getattr(tracker, "delivered_count", 0)),
 						str(current_edge),
 						range_text,
+						uwb_diag,
 						_short_path_text(current_plan),
 						rec_text,
 					)

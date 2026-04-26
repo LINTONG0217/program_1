@@ -2,11 +2,12 @@ import time
 from machine import UART, Pin
 from Module import config
 
+
 def wait_c14_start():
     if not bool(getattr(config, "TEST_WAIT_C14_ENABLE", True)):
         return
     pin_name = getattr(config, "NAV_KEY_PIN", "C14")
-    
+
     pull_up = getattr(Pin, "PULL_UP_47K", None)
     if pull_up is not None:
         try:
@@ -16,12 +17,71 @@ def wait_c14_start():
     else:
         key = Pin(pin_name, Pin.IN)
 
-    print("press {} to start UWB Distance Polling test".format(pin_name))
+    print("press {} to start UWB distance test".format(pin_name))
     while key.value() != 0:
         time.sleep_ms(20)
     time.sleep_ms(60)
     while key.value() == 0:
         time.sleep_ms(20)
+
+
+def _pin_value(pin):
+    if pin is None:
+        return None
+    try:
+        return int(pin)
+    except Exception:
+        return pin
+
+
+def _open_uart(uart_id, baudrate, tx_pin=None, rx_pin=None):
+    if tx_pin is not None and rx_pin is not None:
+        tx_obj = Pin(_pin_value(tx_pin))
+        rx_obj = Pin(_pin_value(rx_pin))
+        try:
+            return UART(uart_id, baudrate=baudrate, tx=tx_obj, rx=rx_obj)
+        except Exception:
+            try:
+                return UART(uart_id, baudrate, tx=tx_obj, rx=rx_obj)
+            except Exception:
+                pass
+    try:
+        return UART(uart_id, baudrate=baudrate)
+    except Exception:
+        return UART(uart_id, baudrate)
+
+
+def _decode(payload):
+    if not payload:
+        return ""
+    if isinstance(payload, bytes):
+        try:
+            return payload.decode("utf-8").strip()
+        except Exception:
+            return payload.decode("latin1").strip()
+    return str(payload).strip()
+
+
+def _read_uart(uart):
+    try:
+        any_count = uart.any()
+    except Exception:
+        any_count = 0
+    if not any_count:
+        return None
+
+    try:
+        line = uart.readline()
+        if line:
+            return line
+    except Exception:
+        pass
+
+    try:
+        return uart.read()
+    except Exception:
+        return None
+
 
 def main():
     wait_c14_start()
@@ -30,59 +90,60 @@ def main():
     baudrate = getattr(config, "UWB_BAUDRATE", 115200)
     tx_pin = getattr(config, "UWB_TX_PIN", None)
     rx_pin = getattr(config, "UWB_RX_PIN", None)
-    
+    poll_interval = int(getattr(config, "UWB_RANGE_POLL_MS", 150))
+    poll_cmd = str(getattr(config, "UWB_RANGE_CMD_TEMPLATE", "AT+DISTANCE\r\n") or "")
+    if not poll_cmd:
+        poll_cmd = "AT+DISTANCE\r\n"
+
     try:
-        # 兼容不同 MicroPython 版本的串口初始化
-        try:
-            if tx_pin is not None and rx_pin is not None:
-                uart = UART(uart_id, baudrate, tx=Pin(tx_pin), rx=Pin(rx_pin))
-            else:
-                uart = UART(uart_id, baudrate)
-        except Exception:
-            uart = UART(uart_id, baudrate)
-        
-        print("[TEST] DW3000 UWB UART init success.")
-        print("[TEST] UART: {}, Baudrate: {}".format(uart_id, baudrate))
-        print("--------------------------------------------------")
-    except Exception as e:
-        print("[ERR] DW3000 UWB UART init failed:", e)
+        uart = _open_uart(uart_id, baudrate, tx_pin, rx_pin)
+        print("[UWB] UART open ok: id={} baud={} tx={} rx={}".format(uart_id, baudrate, tx_pin, rx_pin))
+        print("[UWB] poll command: {!r}".format(poll_cmd))
+        print("[UWB] if only TX count increases and RX stays 0, check DW3000 wiring/config.")
+    except Exception as exc:
+        print("[ERR] UWB UART open failed:", exc)
         return
 
     last_poll = 0
-    poll_interval = 150  # 每 150ms 发送一次查询指令
+    last_report = time.ticks_ms()
+    tx_count = 0
+    rx_count = 0
+    last_rx_text = ""
 
     while True:
         now = time.ticks_ms()
-        
-        # 1. 主动发送查询距离的 AT 指令
+
         if time.ticks_diff(now, last_poll) >= poll_interval:
             last_poll = now
-            # 发送刚才我们测出来的绝密指令，必须带回车换行 \r\n
-            uart.write(b"AT+DISTANCE\r\n")
-
-        # 2. 接收 UWB 模块的回复
-        if getattr(uart, "any", lambda: 0)():
+            cmd = poll_cmd
+            if "{id}" in cmd:
+                anchor_id = tx_count % 2
+                cmd = cmd.format(id=anchor_id)
             try:
-                line = uart.readline()
-                if line:
-                    text = line.decode('utf-8', 'ignore').strip()
-                    # 只要包含 distance: 就提取后面的数字
-                    if "distance:" in text.lower():
-                        try:
-                            # 格式如 "distance: 1.250000"
-                            dist_str = text.split(":")[1].strip()
-                            dist_m = float(dist_str)
-                            print("[UWB] 双车距离: {:.3f} 米".format(dist_m))
-                        except ValueError:
-                            print("[RAW 解析失败]:", text)
-                    else:
-                        # 打印其它原始回复内容，方便我们排查到底回了什么！
-                        if text:
-                            print("[RAW 回复]:", text)
-            except Exception as e:
-                pass
-        
+                uart.write(cmd.encode("utf-8"))
+                tx_count += 1
+            except Exception as exc:
+                print("[ERR] write failed:", exc)
+
+        payload = _read_uart(uart)
+        if payload:
+            rx_count += 1
+            text = _decode(payload)
+            last_rx_text = text
+            if text:
+                print("[RX {}] {}".format(rx_count, text))
+            else:
+                print("[RX {} bytes] {}".format(rx_count, payload))
+
+        if time.ticks_diff(now, last_report) >= 1000:
+            last_report = now
+            if rx_count:
+                print("[STAT] tx={} rx={} last={!r}".format(tx_count, rx_count, last_rx_text[:60]))
+            else:
+                print("[STAT] tx={} rx=0 no DW3000 reply yet".format(tx_count))
+
         time.sleep_ms(10)
+
 
 if __name__ == "__main__":
     main()

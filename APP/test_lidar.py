@@ -67,9 +67,8 @@ def main():
     print("CTRL+C to stop")
 
     while True:
-        now = _ticks_ms()
-
         frame = rx.read_frame()
+        now = _ticks_ms()
         src = "NEW" if frame else "NONE"
 
         if not frame:

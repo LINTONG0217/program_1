@@ -94,6 +94,7 @@ class UWBRangeReceiver:
 		self.poll_ms = int(getattr(cfg, "UWB_RANGE_POLL_MS", 120))
 		self.poll_cmd_template = str(getattr(cfg, "UWB_RANGE_CMD_TEMPLATE", "") or "")
 		self.last_poll_ms = 0
+		self.last_poll_cmd = None
 		self._poll_index = 0
 		self._awaiting_anchor_id = None
 
@@ -238,6 +239,7 @@ class UWBRangeReceiver:
 		cmd = self.poll_cmd_template
 		if "{id}" in cmd:
 			cmd = cmd.format(id=anchor_id)
+		self.last_poll_cmd = cmd
 		try:
 			self.uart.write(cmd.encode("utf-8"))
 		except Exception:

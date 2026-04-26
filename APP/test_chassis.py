@@ -18,6 +18,9 @@ def wait_c14_start():
         except Exception:
             pass
 
+    print("release {} then press to start test".format(pin_name))
+    while key.value() == 0:
+        time.sleep_ms(20)
     print("press {} to start test".format(pin_name))
     while key.value() != 0:
         time.sleep_ms(20)
@@ -72,6 +75,23 @@ def sleep_with_toggle(ms, chassis, toggle=None):
     return False
 
 
+def stop_gap(chassis, toggle=None):
+    chassis.stop()
+    gap_ms = int(getattr(config, "TEST_CHASSIS_STEP_GAP_MS", 1000))
+    return sleep_with_toggle(gap_ms, chassis, toggle)
+
+
+def run_motor_duty(chassis, motor, duty, duration_ms, toggle=None):
+    start = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), start) < duration_ms:
+        if handle_c14_toggle(toggle, chassis):
+            return True
+        motor.duty(duty)
+        time.sleep_ms(50)
+    motor.stop()
+    return False
+
+
 def build_chassis():
     motor_fl = Motor(*config.MOTOR_FL_PINS, freq=config.PWM_FREQ, pwm_max=config.PWM_MAX, reverse=config.MOTOR_REVERSE.get("fl", False))
     motor_fr = Motor(*config.MOTOR_FR_PINS, freq=config.PWM_FREQ, pwm_max=config.PWM_MAX, reverse=config.MOTOR_REVERSE.get("fr", False))
@@ -90,6 +110,9 @@ def step(title, action, duration=1500, period_ms=50, chassis=None, toggle=None):
         if sleep_with_toggle(period_ms, chassis, toggle):
             return True
         elapsed_active += period_ms
+    chassis.stop()
+    if stop_gap(chassis, toggle):
+        return True
     return False
 
 
@@ -104,7 +127,11 @@ def prepare_test_mode(chassis):
     cfg.CHASSIS_MAX_VW_STEP = 100
 
 
-def direct_motor_smoke_test(chassis, duty=3500, duration_ms=800, toggle=None):
+def direct_motor_smoke_test(chassis, duty=None, duration_ms=None, toggle=None):
+    if duty is None:
+        duty = int(getattr(config, "TEST_CHASSIS_DIRECT_DUTY", 1200))
+    if duration_ms is None:
+        duration_ms = int(getattr(config, "TEST_CHASSIS_MOTOR_DURATION_MS", 2000))
     motors = [
         ("fl", chassis.fl),
         ("fr", chassis.fr),
@@ -120,18 +147,16 @@ def direct_motor_smoke_test(chassis, duty=3500, duration_ms=800, toggle=None):
             "reverse=", getattr(motor, "reverse", False),
         )
         try:
-            if handle_c14_toggle(toggle, chassis):
+            print("test: motor {} forward duty {}".format(name, duty))
+            if run_motor_duty(chassis, motor, duty, duration_ms, toggle):
                 return True
-            motor.duty(duty)
-            if sleep_with_toggle(duration_ms, chassis, toggle):
+            if stop_gap(chassis, toggle):
                 return True
-            if handle_c14_toggle(toggle, chassis):
+
+            print("test: motor {} reverse duty {}".format(name, duty))
+            if run_motor_duty(chassis, motor, -duty, duration_ms, toggle):
                 return True
-            motor.duty(-duty)
-            if sleep_with_toggle(duration_ms, chassis, toggle):
-                return True
-            motor.stop()
-            if sleep_with_toggle(250, chassis, toggle):
+            if stop_gap(chassis, toggle):
                 return True
         except Exception as e:
             print("motor", name, "test error:", e)
@@ -140,31 +165,37 @@ def direct_motor_smoke_test(chassis, duty=3500, duration_ms=800, toggle=None):
 
 
 def main():
+    wait_c14_start()
     chassis = build_chassis()
     prepare_test_mode(chassis)
-    wait_c14_start()
     toggle = create_c14_toggle()
+    move_speed = float(getattr(config, "TEST_CHASSIS_MOVE_SPEED", 20))
+    rotate_speed = float(getattr(config, "TEST_CHASSIS_ROTATE_SPEED", 15))
+    move_duration = int(getattr(config, "TEST_CHASSIS_MOVE_DURATION_MS", 2000))
     try:
         while True:
             if consume_restart(toggle):
                 print("restart sequence")
             if direct_motor_smoke_test(chassis, toggle=toggle):
                 continue
-            if step("forward", lambda: chassis.forward(55), chassis=chassis, toggle=toggle):
+            print("direct motor smoke test done; start chassis movement tests after gap")
+            if stop_gap(chassis, toggle):
                 continue
-            if step("backward", lambda: chassis.forward(-55), chassis=chassis, toggle=toggle):
+            if step("forward", lambda: chassis.forward(move_speed), duration=move_duration, chassis=chassis, toggle=toggle):
                 continue
-            if step("strafe right", lambda: chassis.strafe(55), chassis=chassis, toggle=toggle):
+            if step("backward", lambda: chassis.forward(-move_speed), duration=move_duration, chassis=chassis, toggle=toggle):
                 continue
-            if step("strafe left", lambda: chassis.strafe(-55), chassis=chassis, toggle=toggle):
+            if step("strafe right", lambda: chassis.strafe(move_speed), duration=move_duration, chassis=chassis, toggle=toggle):
                 continue
-            if step("rotate cw", lambda: chassis.rotate(45), chassis=chassis, toggle=toggle):
+            if step("strafe left", lambda: chassis.strafe(-move_speed), duration=move_duration, chassis=chassis, toggle=toggle):
                 continue
-            if step("rotate ccw", lambda: chassis.rotate(-45), chassis=chassis, toggle=toggle):
+            if step("rotate cw", lambda: chassis.rotate(rotate_speed), duration=move_duration, chassis=chassis, toggle=toggle):
                 continue
-            if step("diagonal front-right", lambda: chassis.move(55, 55, 0), chassis=chassis, toggle=toggle):
+            if step("rotate ccw", lambda: chassis.rotate(-rotate_speed), duration=move_duration, chassis=chassis, toggle=toggle):
                 continue
-            if step("diagonal rear-left", lambda: chassis.move(-55, -55, 0), chassis=chassis, toggle=toggle):
+            if step("diagonal front-right", lambda: chassis.move(move_speed, move_speed, 0), duration=move_duration, chassis=chassis, toggle=toggle):
+                continue
+            if step("diagonal rear-left", lambda: chassis.move(-move_speed, -move_speed, 0), duration=move_duration, chassis=chassis, toggle=toggle):
                 continue
             break
     finally:

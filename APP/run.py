@@ -56,6 +56,11 @@ def run_profile(profile):
 
         return main()
 
+    if p in ("test_openart_track", "openart_track"):
+        from APP.test_openart_track import main
+
+        return main()
+
     if p in ("competition", "comp"):
         try:
             from APP.competition import main
@@ -77,7 +82,7 @@ def run_profile(profile):
         return main()
 
     raise ValueError(
-        "unsupported APP_PROFILE: {} (supported: single/test_chassis/test_straight/test_lidar/test_lidar_track/competition/dual_slave/test_uwb_two_anchor)".format(
+        "unsupported APP_PROFILE: {} (supported: single/test_chassis/test_straight/test_lidar/test_lidar_track/test_openart_track/competition/dual_slave/test_uwb_two_anchor)".format(
             p
         )
     )

@@ -469,6 +469,7 @@ class OpenArtMiniReceiver:
 			return None
 		label = None
 		conf = 0.0
+		extra = {}
 		parts = text.split(",")
 		for part in parts:
 			item = part.strip()
@@ -483,15 +484,22 @@ class OpenArtMiniReceiver:
 						conf = float(value)
 					except Exception:
 						conf = 0.0
+				elif key in ("cx", "cy", "x", "y", "pixels", "area", "w", "h"):
+					try:
+						extra[key] = float(value)
+					except Exception:
+						extra[key] = value
 			elif label is None:
 				label = item
 		if not label:
 			return None
-		return {
+		result = {
 			"label": label,
 			"confidence": conf,
 			"raw": text,
 		}
+		result.update(extra)
+		return result
 
 	def update(self):
 		if self.uart is None:

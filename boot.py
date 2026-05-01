@@ -11,18 +11,6 @@ from machine import *
 import gc
 import os
 import time
-from machine import Pin
-
-
-def _force_motor_pins_safe():
-	for pin_name in ("D4", "D5", "D6", "D7", "C30", "C31", "C28", "C29"):
-		try:
-			Pin(pin_name, Pin.OUT).value(0)
-		except Exception:
-			pass
-
-
-_force_motor_pins_safe()
 
 
 try:

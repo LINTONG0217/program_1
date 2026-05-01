@@ -4,7 +4,7 @@
 
 - [ ] 电池电压正常，急停可用
 - [ ] 轮子离地空转检查无卡滞
-- [ ] 雷达串口线连接正确（YDLIDAR T-MINI PLUS）
+- [ ] OpenArt 串口线连接正确
 
 ## 1. 底盘动作测试（先做）
 
@@ -21,17 +21,19 @@
 - 方向反：调整 Module/config.py 中 `MOTOR_REVERSE`
 - 单轮不动：检查电机线、驱动口、对应引脚
 
-## 2. 雷达数据测试
+## 2. 视觉调试测试
 
-文件：APP/test_lidar.py
+文件：APP/debug.py（`APP_PROFILE=debug`）
 
-- [ ] 终端持续输出 dist(mm)/ang(deg)
-- [ ] 遮挡/靠近前方目标时，dist 变小、size 变大
+- [ ] 串口持续输出 JSON
+- [ ] `object` 能随目标移动变化
+- [ ] `zone` 可稳定识别
+- [ ] `field` / `field_corner` 可识别黄色边界和角点
 
 失败处理：
 
-- 一直 no_target：优先排查 UART 是否能打开/接线是否正确/波特率是否匹配
-- 角度方向反：调整 Module/config.py 的 LIDAR_ANGLE_SIGN
+- 识别不稳：调 Module/config.py 的阈值（`OPENART_*_THRESHOLD`）
+- 无输出：检查波特率、TX/RX、视觉端脚本是否运行
 
 ## 3. 主流程单车测试
 
@@ -46,12 +48,17 @@
 - 抖动：降低速度参数（`APPROACH_MAX_SPEED`、`PUSH_SPEED`）
 - 搜索慢：提高 `SEARCH_ROT_SPEED`
 
-## 4. （可选）位姿输入测试
+## 4. 开机全局定位测试（俯视+可见角点）
 
-若启用 UWB 位姿输入（DW3000 等）：
+- [ ] 启动日志出现 `openart global init`
+- [ ] 初始位置与真实位置接近
+- [ ] 朝向符号正确（不镜像）
 
-- [ ] 系统能持续更新 pose
-- [ ] 返回起点判断生效（competition 模式）
+失败处理：
+
+- 无法初始化：提高 `OPENART_GLOBAL_LOC_MAX_TRIES`
+- 坐标方向反：调整 `OPENART_PIXEL_TO_ROBOT_X_SIGN / Y_SIGN`
+- 比例偏差：微调 `OPENART_PIXEL_TO_M_X / Y`
 
 ## 5. 任务闭环测试（追物→推区）
 

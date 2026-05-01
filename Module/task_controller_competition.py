@@ -9,6 +9,7 @@ from Module.task_controller_basic import SmartCarController, clamp
 class CompetitionController(SmartCarController):
 	STATE_AVOID = "avoid"
 	STATE_WAIT_BOTH_READY = "wait_both_ready"
+	STATE_GO_CENTER = "go_center"
 	STATE_COOP_PUSH = "coop_push"
 	STATE_AFTER_PUSH_RETREAT = "after_push_retreat"
 	STATE_RETURN_HOME = "return_home"
@@ -52,9 +53,15 @@ class CompetitionController(SmartCarController):
 		self.mission_finish_pending = False
 		self.mission_return_stable_ms = None
 		self.drop_points = []
+		self.center_yaw_lock = None
+		self.center_nav_start_ms = None
+		self.center_stable_start_ms = None
+		self._center_pose_warned = False
 
 		if callable(self.remote_ready_fn) and bool(getattr(self.cfg, "DUAL_REQUIRE_SLAVE_READY", True)):
 			self._set_state(self.STATE_WAIT_BOTH_READY)
+		elif bool(getattr(self.cfg, "CENTER_FIRST_ENABLE", False)):
+			self._set_state(self.STATE_GO_CENTER)
 
 	def _target_is_important(self, target):
 		return bool(target and target["size"] >= self.cfg.OBJECT_LOCK_SIZE)
@@ -69,6 +76,112 @@ class CompetitionController(SmartCarController):
 
 	def _field_center(self):
 		return float(self.cfg.FIELD_SIZE_X_M) * 0.5, float(self.cfg.FIELD_SIZE_Y_M) * 0.5
+
+	def _center_target(self):
+		x = getattr(self.cfg, "CENTER_TARGET_X", None)
+		y = getattr(self.cfg, "CENTER_TARGET_Y", None)
+		if x is None or y is None:
+			return self._field_center()
+		return float(x), float(y)
+
+	def _angle_error(self, target_yaw, current_yaw):
+		err = float(target_yaw) - float(current_yaw)
+		while err > 180.0:
+			err -= 360.0
+		while err < -180.0:
+			err += 360.0
+		return err
+
+	def _world_to_body(self, vx_world, vy_world, yaw_deg):
+		rad = math.radians(float(yaw_deg))
+		cos_a = math.cos(rad)
+		sin_a = math.sin(rad)
+		return (
+			vx_world * cos_a + vy_world * sin_a,
+			-vx_world * sin_a + vy_world * cos_a,
+		)
+
+	def _center_enabled(self):
+		return bool(getattr(self.cfg, "CENTER_FIRST_ENABLE", False))
+
+	def _go_center_step(self):
+		pose = self._get_pose()
+		if not pose:
+			self.chassis.stop()
+			if not self._center_pose_warned:
+				print("go center: pose unavailable")
+				self._center_pose_warned = True
+			return
+
+		self._center_pose_warned = False
+		now = time.ticks_ms()
+		if self.center_nav_start_ms is None:
+			self.center_nav_start_ms = now
+
+		tx, ty = self._center_target()
+		x = float(pose.get("x", 0.0))
+		y = float(pose.get("y", 0.0))
+		yaw = float(pose.get("yaw", 0.0))
+		ex = tx - x
+		ey = ty - y
+		dist = math.sqrt(ex * ex + ey * ey)
+
+		if self.center_yaw_lock is None:
+			if bool(getattr(self.cfg, "CENTER_LOCK_CURRENT_YAW", True)):
+				self.center_yaw_lock = yaw
+			else:
+				self.center_yaw_lock = float(getattr(self.cfg, "CENTER_LOCK_YAW_DEG", getattr(self.cfg, "NAV_LOCK_YAW_DEG", 0.0)))
+
+		yaw_err = self._angle_error(self.center_yaw_lock, yaw)
+		pos_tol = float(getattr(self.cfg, "CENTER_NAV_TOLERANCE_M", 0.08))
+		yaw_tol = float(getattr(self.cfg, "CENTER_YAW_TOLERANCE_DEG", 5.0))
+		if dist <= pos_tol and abs(yaw_err) <= yaw_tol:
+			if self.center_stable_start_ms is None:
+				self.center_stable_start_ms = now
+			stable_ms = int(getattr(self.cfg, "CENTER_NAV_STABLE_MS", 250))
+			if time.ticks_diff(now, self.center_stable_start_ms) >= stable_ms:
+				self.chassis.stop()
+				print(
+					"go center: reached",
+					"x={:.2f}".format(x),
+					"y={:.2f}".format(y),
+					"yaw={:.1f}".format(yaw),
+					"dist={:.2f}".format(float(pose.get("distance_m", 0.0))),
+				)
+				self._set_state(self.STATE_SEARCH_OBJECT)
+			return
+		self.center_stable_start_ms = None
+
+		timeout_ms = int(getattr(self.cfg, "CENTER_NAV_TIMEOUT_MS", 10000))
+		if timeout_ms > 0 and time.ticks_diff(now, self.center_nav_start_ms) >= timeout_ms:
+			self.chassis.stop()
+			print("go center: timeout", "x={:.2f}".format(x), "y={:.2f}".format(y), "target=({:.2f},{:.2f})".format(tx, ty))
+			self._set_state(self.STATE_SEARCH_OBJECT)
+			return
+
+		kp = float(getattr(self.cfg, "CENTER_NAV_KP", 90.0))
+		max_speed = float(getattr(self.cfg, "CENTER_NAV_MAX_SPEED", 38.0))
+		min_speed = float(getattr(self.cfg, "CENTER_NAV_MIN_SPEED", 10.0))
+		vx_world = clamp(ex * kp, -max_speed, max_speed)
+		vy_world = clamp(ey * kp, -max_speed, max_speed)
+		if dist > pos_tol:
+			if abs(vx_world) > 0 and abs(vx_world) < min_speed:
+				vx_world = min_speed if vx_world > 0 else -min_speed
+			if abs(vy_world) > 0 and abs(vy_world) < min_speed:
+				vy_world = min_speed if vy_world > 0 else -min_speed
+		else:
+			vx_world = 0.0
+			vy_world = 0.0
+
+		vx_body, vy_body = self._world_to_body(vx_world, vy_world, yaw)
+		yaw_deadband = float(getattr(self.cfg, "CENTER_YAW_DEADBAND_DEG", 1.5))
+		if abs(yaw_err) <= yaw_deadband:
+			vw = 0.0
+		else:
+			vw = yaw_err * float(getattr(self.cfg, "CENTER_YAW_KP", 1.2))
+			vw = clamp(vw, -float(getattr(self.cfg, "CENTER_YAW_MAX_SPEED", 24.0)), float(getattr(self.cfg, "CENTER_YAW_MAX_SPEED", 24.0)))
+
+		self.chassis.move(vx_body, vy_body, vw)
 
 	def _in_center_zone(self, pose):
 		if not pose:
@@ -128,7 +241,10 @@ class CompetitionController(SmartCarController):
 	def _wait_both_ready_step(self):
 		ready = True if not callable(self.remote_ready_fn) else bool(self.remote_ready_fn())
 		if ready:
-			self._set_state(self.STATE_SEARCH_OBJECT)
+			if self._center_enabled():
+				self._set_state(self.STATE_GO_CENTER)
+			else:
+				self._set_state(self.STATE_SEARCH_OBJECT)
 			return
 		self.chassis.stop()
 
@@ -153,6 +269,8 @@ class CompetitionController(SmartCarController):
 		self.push_target_lost_count = 0
 		if callable(self.remote_ready_fn) and bool(getattr(self.cfg, "DUAL_REQUIRE_SLAVE_READY", True)):
 			self._set_state(self.STATE_WAIT_BOTH_READY)
+		elif self._center_enabled():
+			self._set_state(self.STATE_GO_CENTER)
 		else:
 			self.wait_next_task_start_ms = time.ticks_ms()
 			self._set_state(self.STATE_WAIT_NEXT_TASK)
@@ -412,6 +530,8 @@ class CompetitionController(SmartCarController):
 
 		if callable(self.remote_ready_fn) and bool(getattr(self.cfg, "DUAL_REQUIRE_SLAVE_READY", True)):
 			self._set_state(self.STATE_WAIT_BOTH_READY)
+		elif self._center_enabled():
+			self._set_state(self.STATE_GO_CENTER)
 		else:
 			self._set_state(self.STATE_SEARCH_OBJECT)
 
@@ -431,6 +551,12 @@ class CompetitionController(SmartCarController):
 			self.search_empty_start_ms = None
 		if new_state != self.STATE_RETURN_HOME:
 			self.mission_return_stable_ms = None
+		if new_state != self.STATE_GO_CENTER:
+			self.center_stable_start_ms = None
+		else:
+			self.center_yaw_lock = None
+			self.center_nav_start_ms = None
+			self.center_stable_start_ms = None
 
 		if new_state == self.STATE_WAIT_BOTH_READY:
 			self.push_start_ms = None
@@ -449,6 +575,10 @@ class CompetitionController(SmartCarController):
 
 		if self.state == self.STATE_WAIT_BOTH_READY:
 			self._wait_both_ready_step()
+			return
+
+		if self.state == self.STATE_GO_CENTER:
+			self._go_center_step()
 			return
 
 		if self.state == self.STATE_COOP_PUSH:

@@ -127,12 +127,10 @@ class OmniChassis:
 		self.last_vw = vw
 		self.last_command_ms = time.ticks_ms()
 
-		drive_vy = vy * float(getattr(self.cfg, "CHASSIS_VY_SIGN", 1.0)) if self.cfg else vy
-
-		v_fl = vx + drive_vy + vw
-		v_fr = vx - drive_vy - vw
-		v_bl = vx - drive_vy + vw
-		v_br = vx + drive_vy - vw
+		v_fl = vx + vy + vw
+		v_fr = vx - vy - vw
+		v_bl = vx - vy + vw
+		v_br = vx + vy - vw
 		self.wheel_targets = {"fl": v_fl, "fr": v_fr, "bl": v_bl, "br": v_br}
 
 		max_v = max(abs(v_fl), abs(v_fr), abs(v_bl), abs(v_br))
@@ -161,7 +159,7 @@ class OmniChassis:
 
 			# 2. 计算底盘各轴动态输出 (ChassisOutput_Dynamic)
 			force_x = self.vx_pid.update(vx - now_vx)
-			force_y = self.vy_pid.update(drive_vy - now_vy)
+			force_y = self.vy_pid.update(vy - now_vy)
 			torque_w = self.vw_pid.update(vw - now_vw)
 
 			# 3. 动力学重分配 + 阻尼 (模拟 C 代码力矩分配逻辑与阻尼项)
@@ -182,7 +180,7 @@ class OmniChassis:
 			self.wheel_feedback = dict(self.wheel_targets)
 
 		active_trim = self.wheel_trim
-		if abs(drive_vy) < 1e-6 and abs(vw) < 1e-6:
+		if abs(vy) < 1e-6 and abs(vw) < 1e-6:
 			if vx >= 0:
 				active_trim = self.wheel_trim_fwd
 			else:

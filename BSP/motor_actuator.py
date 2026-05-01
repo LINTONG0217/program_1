@@ -17,26 +17,6 @@ _MOTOR_CHANNEL_MAP = {
 }
 
 
-def _config_value(name, default):
-	try:
-		from Module import config
-
-		return getattr(config, name, default)
-	except Exception:
-		return default
-
-
-def _config_bool(name, default):
-	return bool(_config_value(name, default))
-
-
-def _config_float(name, default):
-	try:
-		return float(_config_value(name, default))
-	except Exception:
-		return float(default)
-
-
 class Motor:
 	def __init__(self, pwm_pin, dir_pin, freq=1000, pwm_max=1023, reverse=False):
 		self.controller = None
@@ -70,22 +50,8 @@ class Motor:
 
 	def set_speed(self, speed):
 		speed = max(-100, min(100, speed))
-		if not _config_bool("MOTOR_OUTPUT_ENABLE", True):
-			speed = 0
 		if self.reverse:
 			speed = -speed
-
-		limit = abs(_config_float("MOTOR_SPEED_LIMIT_PERCENT", 100.0))
-		if limit < 100:
-			speed = max(-limit, min(limit, speed))
-
-		step = abs(_config_float("MOTOR_MAX_SPEED_STEP_PERCENT", 0.0))
-		if step > 0:
-			delta = speed - self.speed
-			if delta > step:
-				speed = self.speed + step
-			elif delta < -step:
-				speed = self.speed - step
 
 		self.speed = speed
 
@@ -106,7 +72,9 @@ class Motor:
 			self._write_pwm(self.pwm, 0)
 
 	def duty(self, pwm_value):
-		limit = abs(int(_config_float("MOTOR_DIRECT_DUTY_LIMIT", self.pwm_max)))
-		limit = max(0, min(self.pwm_max, limit))
-		pwm_value = int(max(-limit, min(limit, pwm_value)))
+		pwm_value = int(max(-self.pwm_max, min(self.pwm_max, pwm_value)))
+		if self.controller is not None:
+			self.controller.duty(pwm_value)
+			self.speed = pwm_value * 100 / self.pwm_max
+			return
 		self.set_speed(pwm_value * 100 / self.pwm_max)

@@ -12,13 +12,37 @@ from machine import Pin
 from Module import config
 
 
-try:
-	from seekfree import IMU963RX  # type: ignore
-except ImportError:
-	try:
-		from imu import IMU963RX  # type: ignore
-	except ImportError:
-		IMU963RX = None
+def _resolve_imu_class():
+	preferred = getattr(config, "IMU_CLASS_NAME", None)
+	names = []
+	if preferred:
+		names.append(str(preferred))
+	names.extend((
+		"IMU963RX",
+		"IMU963RA",
+		"IMU963RB",
+		"IMU660RA",
+		"IMU660RB",
+		"ICM20602",
+		"IMU",
+	))
+	for module_name in ("seekfree", "imu", "smartcar"):
+		try:
+			mod = __import__(module_name)
+		except Exception:
+			continue
+		for name in names:
+			cls = getattr(mod, name, None)
+			if cls is not None:
+				try:
+					print("imu class:", module_name + "." + name)
+				except Exception:
+					pass
+				return cls
+	return None
+
+
+IMU963RX = _resolve_imu_class()
 
 try:
 	from smartcar import encoder as HardwareEncoder  # type: ignore
@@ -64,16 +88,49 @@ class NavigationKey:
 class IMUDevice:
 	def __init__(self, cfg):
 		self.cfg = cfg
-		self.imu = None
-		if IMU963RX:
-			try:
-				self.imu = IMU963RX()
-			except Exception as e:
-				# Some boards raise "Module init fault" when the IMU is absent
-				# or the firmware image does not provide the expected driver.
-				print("board: imu init failed, continue without imu:", e)
+		self.imu = self._create_imu()
 		self.adapter = IMUAdapter(self.imu)
 		self.gyro_offset = 0.0
+
+	def _create_imu(self):
+		if IMU963RX is None:
+			return None
+
+		pins = getattr(self.cfg, "IMU_PINS", None)
+		pin_names = []
+		if isinstance(pins, (tuple, list)):
+			pin_names = list(pins)
+		elif pins:
+			pin_names = [pins]
+
+		candidates = [()]
+		if pin_names:
+			candidates.append(tuple(pin_names))
+			try:
+				candidates.append(tuple(Pin(p) for p in pin_names))
+			except Exception:
+				pass
+			if len(pin_names) == 3:
+				candidates.append((pin_names[0], pin_names[1], pin_names[2]))
+			if len(pin_names) == 2:
+				candidates.append((pin_names[0], pin_names[1]))
+		for args in candidates:
+			try:
+				dev = IMU963RX(*args)
+				try:
+					print("imu init args:", args)
+				except Exception:
+					pass
+				return dev
+			except TypeError:
+				continue
+			except Exception as e:
+				try:
+					print("imu init failed:", args, repr(e))
+				except Exception:
+					pass
+				continue
+		return None
 
 	def calibrate(self):
 		if self.imu is None:
@@ -251,7 +308,6 @@ class LCDGridDisplay:
 		self.car_col = self.cols // 2
 		self.car_row = self.rows // 2
 		self.last_ms = time.ticks_ms()
-		self.last_pose_text_ms = 0
 		self.lcd_dev = None
 		self.map = None
 
@@ -320,56 +376,6 @@ class LCDGridDisplay:
 		if hasattr(lcd, "line"):
 			lcd.line(int(x1), int(y1), int(x2), int(y2))
 
-	def _text(self, x, y, text, color=None, bg_color=None):
-		devices = []
-		if self.lcd_dev is not None:
-			devices.append(self.lcd_dev)
-		if lcd is not None:
-			devices.append(lcd)
-
-		for dev in devices:
-			for name in ("str16", "str12", "string", "text", "draw_string"):
-				method = getattr(dev, name, None)
-				if not callable(method):
-					continue
-				try:
-					if bg_color is not None:
-						method(int(x), int(y), str(text), color, bg_color)
-					elif color is not None:
-						method(int(x), int(y), str(text), color)
-					else:
-						method(int(x), int(y), str(text))
-					return True
-				except TypeError:
-					try:
-						method(int(x), int(y), str(text))
-						return True
-					except Exception:
-						pass
-				except Exception:
-					pass
-		return False
-
-	def _fill_rect(self, x, y, w, h, color):
-		for dy in range(max(0, int(h))):
-			self._line(int(x), int(y + dy), int(x + w), int(y + dy), color)
-
-	def _draw_pose_text(self, pose):
-		if not pose:
-			return
-		now = time.ticks_ms()
-		interval = int(getattr(self.cfg, "LCD_POSE_TEXT_MS", 120))
-		if time.ticks_diff(now, self.last_pose_text_ms) < interval:
-			return
-		self.last_pose_text_ms = now
-
-		x = float(pose.get("x", 0.0))
-		y = float(pose.get("y", 0.0))
-		yaw = float(pose.get("yaw", 0.0))
-		line = "X:{:.2f} Y:{:.2f} A:{:.0f}".format(x, y, yaw)
-		self._fill_rect(0, 0, self.width - 1, 16, self.cfg.LCD_BG_COLOR)
-		self._text(2, 2, line, self.cfg.LCD_TEXT_COLOR, self.cfg.LCD_BG_COLOR)
-
 	def draw_grid(self):
 		for col in range(self.cols + 1):
 			x = self.grid_left + col * self.cell_w
@@ -391,7 +397,6 @@ class LCDGridDisplay:
 		if self.map is not None:
 			if pose:
 				self.map.update_car(pose.get("x", 0.0), pose.get("y", 0.0))
-				self._draw_pose_text(pose)
 			else:
 				now = time.ticks_ms()
 				dt_ms = max(1, time.ticks_diff(now, self.last_ms))
@@ -418,7 +423,6 @@ class LCDGridDisplay:
 		self.clear()
 		self.draw_grid()
 		self.draw_car(self.car_col, self.car_row)
-		self._draw_pose_text(pose)
 
 
 class MainControl:

@@ -1,3 +1,5 @@
-# 已移除：openart_perception
+# openart_perception
 
-本工程已精简为仅雷达（YDLIDAR T-MINI PLUS）链路，OpenART/摄像机识别模块不再维护。
+- 层级：Module
+- 功能：OpenArt本地视觉识别（object/zone/field/field_corner）
+- 代码映射：`vision_openart.py`

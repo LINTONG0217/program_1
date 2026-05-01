@@ -15,6 +15,7 @@ class PoseEstimator:
 		self.vx = 0.0
 		self.vy = 0.0
 		self.vw = 0.0
+		self.distance_m = 0.0
 		self.last_ms = time.ticks_ms()
 		self.fusion = IMUFusion(
 			q_angle=getattr(config, "IMU_FUSION_Q_ANGLE", 0.001),
@@ -32,6 +33,7 @@ class PoseEstimator:
 		self.vx = 0.0
 		self.vy = 0.0
 		self.vw = 0.0
+		self.distance_m = 0.0
 		self.last_ms = time.ticks_ms()
 		self.fusion.angle = 0.0
 		self.fusion.bias = 0.0
@@ -127,6 +129,10 @@ class PoseEstimator:
 		self.odometry.update(wheel_list, self.yaw, dt=dt)
 		self.x, self.y, local_yaw = self.odometry.get_position()
 		self.yaw = local_yaw
+		try:
+			self.distance_m = self.odometry.get_distance()
+		except Exception:
+			pass
 
 		return self.get_pose()
 
@@ -138,4 +144,5 @@ class PoseEstimator:
 			"vx": self.vx,
 			"vy": self.vy,
 			"vw": self.vw,
+			"distance_m": self.distance_m,
 		}

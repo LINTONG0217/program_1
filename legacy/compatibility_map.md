@@ -15,20 +15,18 @@
 - estimation.py -> Module/pose_estimation.py
 - robot_system.py -> Module/robot_runtime.py
 - controller.py -> Module/task_controller_basic.py
-- vision.py -> removed
-- vision_openart.py -> removed
-- global_localization.py -> removed
+- vision.py -> Module/uart_vision_receiver.py
+- vision_openart.py -> Module/openart_perception.py
+- global_localization.py -> Module/global_pose_initializer.py
 
 ## APP
 
-- main_openart.py -> removed
-- main_openart_debug.py -> removed
+- main_openart.py -> APP/app_openart_single.py
+- main_openart_debug.py -> APP/app_openart_debug.py
 
 ## 当前主入口
 
 - APP/main.py
 - APP/run.py
 - APP/single.py
-- APP/competition.py
-- APP/dual_slave.py
-- APP/test_uwb_two_anchor_localization.py
+- APP/debug.py

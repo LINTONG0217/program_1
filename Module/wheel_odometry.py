@@ -9,12 +9,14 @@ class AdvancedOdometry:
 		self.y = 0.0
 		self.yaw_offset = 0.0
 		self.local_yaw = 0.0
+		self.distance_m = 0.0
 
 	def reset(self, current_absolute_yaw):
 		self.x = 0.0
 		self.y = 0.0
 		self.yaw_offset = current_absolute_yaw
 		self.local_yaw = 0.0
+		self.distance_m = 0.0
 
 	def set_pose(self, x, y, world_yaw, current_absolute_yaw):
 		self.x = float(x)
@@ -28,7 +30,7 @@ class AdvancedOdometry:
 		v_lf, v_rf, v_lr, v_rr = current_speeds
 
 		vx_local = (v_lf + v_rf + v_lr + v_rr) / 4.0
-		vy_local = (-v_lf + v_rf + v_lr - v_rr) / 4.0
+		vy_local = (v_lf - v_rf - v_lr + v_rr) / 4.0
 
 		if abs(vx_local) < 0.005:
 			vx_local = 0.0
@@ -37,6 +39,7 @@ class AdvancedOdometry:
 
 		dx_local = vx_local * dt
 		dy_local = vy_local * dt
+		self.distance_m += math.sqrt(dx_local * dx_local + dy_local * dy_local)
 
 		rad = math.radians(self.local_yaw)
 		cos_a = math.cos(rad)
@@ -47,3 +50,6 @@ class AdvancedOdometry:
 
 	def get_position(self):
 		return self.x, self.y, self.local_yaw
+
+	def get_distance(self):
+		return self.distance_m

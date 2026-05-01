@@ -27,7 +27,7 @@
 		],
 		"python.autoComplete.extraPaths": [
 			"${workspaceFolder}/typings",
-			"/Users/lintong/.vscode/extensions/rt-thread.rt-thread-micropython-1.0.11/microExamples/code-completion"
+			"c:/Users/LINTONG/.vscode/extensions/rt-thread.rt-thread-micropython-1.0.11/microExamples/code-completion"
 		],
 		"python.analysis.stubPath": "${workspaceFolder}/typings",
 		"files.associations": {

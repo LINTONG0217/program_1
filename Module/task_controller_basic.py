@@ -638,11 +638,5 @@ class SmartCarController:
 
 	def run_forever(self):
 		while True:
-			try:
-				self.update()
-			except Exception as e:
-				import sys
-				print("CRASH IN UPDATE", repr(e))
-				sys.print_exception(e)
-				raise
+			self.update()
 			time.sleep_ms(self.cfg.LOOP_DELAY_MS)

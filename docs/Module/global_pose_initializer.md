@@ -1,3 +1,5 @@
-# 已移除：global_pose_initializer
+# global_pose_initializer
 
-本工程已精简为仅雷达（YDLIDAR T-MINI PLUS）链路；若需要全局位姿输入，建议使用 UWB 等外部定位源。
+- 层级：Module
+- 功能：开机利用场地角点估计全局初始位姿
+- 代码映射：`global_localization.py`

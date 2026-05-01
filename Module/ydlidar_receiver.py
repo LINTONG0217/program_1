@@ -574,7 +574,10 @@ class YDLidarReceiver:
 
 		has_packet = False
 		nearest = None
+		nearest_score = None
 		scan_points = [] if self.keep_scan_points else None
+		center_deg = float(getattr(self.cfg, "LIDAR_TRACK_CENTER_DEG", (self.front_min_deg + self.front_max_deg) * 0.5))
+		center_bias = float(getattr(self.cfg, "LIDAR_SELECT_CENTER_BIAS_MM_PER_DEG", 0.0))
 
 		while True:
 			if len(self._buf) < 10:
@@ -640,11 +643,14 @@ class YDLidarReceiver:
 						"angle_deg": ang,
 					})
 
-				if nearest is None or dist_mm < nearest["distance_mm"]:
+				target_score = dist_mm + abs(ang - center_deg) * center_bias
+				if nearest is None or target_score < nearest_score:
 					nearest = {
 						"distance_mm": dist_mm,
 						"angle_deg": ang,
+						"score": target_score,
 					}
+					nearest_score = target_score
 
 		scan = None
 		if has_packet and self.keep_scan_points:

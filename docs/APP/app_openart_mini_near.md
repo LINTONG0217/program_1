@@ -15,7 +15,7 @@
 主控侧兼容：
 
 - `APP/test_uwb_two_anchor_localization.py`
-- `Module/lidar_grid_navigation.py` 中的 `OpenArtMiniReceiver`
+- `Module/openart_mini_receiver.py` 中的 `OpenArtMiniReceiver`
 
 建议流程：
 

@@ -169,7 +169,7 @@
 
 主车接收模块：
 
-- `Module/lidar_grid_navigation.py` 中的 `OpenArtMiniReceiver`
+- `Module/openart_mini_receiver.py` 中的 `OpenArtMiniReceiver`
 
 检查项：
 
@@ -247,7 +247,7 @@
 
 - 搬运时两车分得太开：调 `COOP_PUSH_LATERAL_OFFSET_M`
 - 从车顶到物体前后侧：调 `COOP_PUSH_FORWARD_OFFSET_M`
-- 物体明明还在场内却误判完成：调 `MATCH_TRACK_TTL_MS`
+- 物体明明还在场内却误判完成：当前轻量追踪链路已不使用栅格 track TTL，优先检查 OpenArt/雷达目标是否稳定输出。
 - 场地已经空了还不停：调 `MISSION_EMPTY_CONFIRM_MS`
 
 ---

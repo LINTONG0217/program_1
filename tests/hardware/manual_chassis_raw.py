@@ -27,10 +27,17 @@ def wait_c14_start():
 
 def step(title, duties, duration_ms=1200):
     print("raw:", title, duties)
-    motors[0].duty(duties[0])
-    motors[1].duty(duties[1])
-    motors[2].duty(duties[2])
-    motors[3].duty(duties[3])
+    reverses = [
+        getattr(config, "MOTOR_REVERSE", {}).get("fl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("fr", True),
+        getattr(config, "MOTOR_REVERSE", {}).get("bl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("br", True),
+    ]
+    for i in range(4):
+        duty = duties[i]
+        if reverses[i]:
+            duty = -duty
+        motors[i].duty(duty)
     time.sleep_ms(duration_ms)
 
 

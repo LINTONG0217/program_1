@@ -1,249 +1,221 @@
-"""Manual IMU heading-lock test for the main controller.
-
-Run from PC, with the board connected:
-
-    python -m mpremote run tests/hardware/manual_heading_lock.py
-
-The car drives slowly forward while locking the yaw angle measured at start.
-Keep the first run slow and safe. If the car corrects in the wrong direction,
-flip HEADING_LOCK_YAW_SIGN in Module/config.py.
-"""
-
 import time
-
-from machine import Pin
-
-from BSP.board_runtime import MainControl
-from BSP.motor_actuator import Motor
-from BSP.omni_chassis_driver import OmniChassis
+from machine import Pin, unique_id
+from seekfree import IMU963RA, MOTOR_CONTROLLER
 from Module import config
 
-try:
-	from seekfree import IMU963RA
-except Exception:
-	IMU963RA = None
+
+# Raw chassis commands are intentionally kept identical to manual_chassis_raw.py.
+FORWARD_DUTIES = [-3600, 3600, -3600, 3600]
+BACKWARD_DUTIES = [3600, -3600, 3600, -3600]
+
+# Heading-lock tuning. Rotation duty is added equally to all four raw motors,
+# matching manual_chassis_raw.py rotate cw/ccw patterns.
+FORWARD_ONLY_MS = 2000
+TARGET_YAW_DEG = 0.0
+GYRO_RAW_TO_DPS = 0.07
+YAW_KP = 115.0
+YAW_KD = 18.0
+YAW_MIN_DUTY = 220
+YAW_MAX_DUTY = 1450
+YAW_DEADBAND_DEG = 0.7
+YAW_SIGN = -1.0
+GYRO_FILTER_ALPHA = 0.35
+ROT_FILTER_ALPHA = 0.45
+ROT_STEP_LIMIT = 260
 
 
 def clamp(value, low, high):
-	return max(low, min(high, value))
-
-
-def angle_error(target, current):
-	err = float(target) - float(current)
-	while err > 180.0:
-		err -= 360.0
-	while err < -180.0:
-		err += 360.0
-	return err
+    return max(low, min(high, value))
 
 
 def wait_c14_start():
-	if not bool(getattr(config, "TEST_WAIT_C14_ENABLE", True)):
-		return
-	pin_name = getattr(config, "NAV_KEY_PIN", "C14")
-	key = Pin(pin_name, Pin.IN)
-	pull_up = getattr(Pin, "PULL_UP_47K", None)
-	if pull_up is not None:
-		try:
-			key = Pin(pin_name, Pin.IN, pull_up)
-		except Exception:
-			pass
+    if not bool(getattr(config, "TEST_WAIT_C14_ENABLE", True)):
+        return
+    pin_name = getattr(config, "NAV_KEY_PIN", "C14")
+    key = Pin(pin_name, Pin.IN)
+    pull_up = getattr(Pin, "PULL_UP_47K", None)
+    if pull_up is not None:
+        try:
+            key = Pin(pin_name, Pin.IN, pull_up)
+        except Exception:
+            pass
 
-	print("press {} to start heading-lock test".format(pin_name))
-	while key.value() != 0:
-		time.sleep_ms(20)
-	time.sleep_ms(60)
-	while key.value() == 0:
-		time.sleep_ms(20)
-	print("{} start".format(pin_name))
-
-
-def build_chassis():
-	motor_fl = Motor(*config.MOTOR_FL_PINS, freq=config.PWM_FREQ, pwm_max=config.PWM_MAX, reverse=config.MOTOR_REVERSE.get("fl", False))
-	motor_fr = Motor(*config.MOTOR_FR_PINS, freq=config.PWM_FREQ, pwm_max=config.PWM_MAX, reverse=config.MOTOR_REVERSE.get("fr", False))
-	motor_bl = Motor(*config.MOTOR_BL_PINS, freq=config.PWM_FREQ, pwm_max=config.PWM_MAX, reverse=config.MOTOR_REVERSE.get("bl", False))
-	motor_br = Motor(*config.MOTOR_BR_PINS, freq=config.PWM_FREQ, pwm_max=config.PWM_MAX, reverse=config.MOTOR_REVERSE.get("br", False))
-	return OmniChassis(motor_fl, motor_fr, motor_bl, motor_br, config=config)
+    print("press {} to start raw heading-lock test".format(pin_name))
+    while key.value() != 0:
+        time.sleep_ms(20)
+    time.sleep_ms(60)
+    while key.value() == 0:
+        time.sleep_ms(20)
+    print("{} start".format(pin_name))
 
 
-def prepare_chassis(chassis):
-	cfg = getattr(chassis, "cfg", None)
-	if not cfg:
-		return
-	cfg.CHASSIS_CMD_DEADBAND = 0
-	cfg.CHASSIS_MAX_VX_STEP = 100
-	cfg.CHASSIS_MAX_VY_STEP = 100
-	cfg.CHASSIS_MAX_VW_STEP = 100
-	cfg.CHASSIS_ENABLE_CLOSED_LOOP = False
+def step(title, duties, duration_ms=1200):
+    print("raw:", title, duties)
+    motors[0].duty(duties[0])
+    motors[1].duty(duties[1])
+    motors[2].duty(duties[2])
+    motors[3].duty(duties[3])
+    time.sleep_ms(duration_ms)
 
 
-def gyro_z_dps(imu_data):
-	gyro = imu_data.get("gyro") if imu_data else None
-	if isinstance(gyro, (tuple, list)) and len(gyro) >= 3:
-		return float(gyro[2])
-	return 0.0
+def stop_motors():
+    for motor in motors:
+        motor.duty(0)
 
 
-class DirectIMU963RA:
-	def __init__(self):
-		self.dev = IMU963RA() if IMU963RA else None
-		self.gyro_offset = 0.0
-
-	def _raw(self):
-		if self.dev is None:
-			return None
-		reader = getattr(self.dev, "read", None)
-		if callable(reader):
-			try:
-				reader()
-			except Exception:
-				pass
-		getter = getattr(self.dev, "get", None)
-		if callable(getter):
-			try:
-				return getter()
-			except Exception:
-				return None
-		return None
-
-	def calibrate(self):
-		if self.dev is None:
-			return
-		total = 0.0
-		count = int(getattr(config, "GYRO_CALIBRATION_SAMPLES", 100))
-		for _ in range(int(getattr(config, "GYRO_CALIBRATION_WARMUP", 20))):
-			self._raw()
-			time.sleep_ms(5)
-		for _ in range(max(1, count)):
-			raw = self._raw()
-			total += raw[5] if raw and len(raw) > 5 else 0.0
-			time.sleep_ms(10)
-		self.gyro_offset = total / max(1, count)
-
-	def read(self):
-		raw = self._raw()
-		if raw and len(raw) > 7:
-			gz = (raw[5] - self.gyro_offset) * getattr(config, "GYRO_RAW_TO_DPS", 0.07)
-			return {"gyro": (0.0, 0.0, gz), "mag": (raw[6], raw[7], raw[8] if len(raw) > 8 else 0), "ok": True, "raw": raw}
-		return {"gyro": None, "mag": None, "ok": False, "raw": raw}
+def add_rotate(forward_duties, rotate_duty):
+    rot = int(clamp(rotate_duty, -YAW_MAX_DUTY, YAW_MAX_DUTY))
+    return [
+        int(clamp(forward_duties[0] + rot, -10000, 10000)),
+        int(clamp(forward_duties[1] + rot, -10000, 10000)),
+        int(clamp(forward_duties[2] + rot, -10000, 10000)),
+        int(clamp(forward_duties[3] + rot, -10000, 10000)),
+    ]
 
 
-def ensure_imu(board):
-	try:
-		sample = board.read_imu()
-		if isinstance(sample, dict) and sample.get("ok"):
-			print("imu source: MainControl")
-			return board, board.read_imu, getattr(board.imu, "calibrate", None), getattr(board.imu, "imu", None)
-	except Exception:
-		pass
-
-	direct = DirectIMU963RA()
-	if direct.dev is not None:
-		print("imu source: direct seekfree.IMU963RA")
-		return direct, direct.read, direct.calibrate, direct.dev
-
-	print("imu source: missing")
-	return board, board.read_imu, getattr(board.imu, "calibrate", None), None
+def set_duties(duties):
+    reverses = [
+        getattr(config, "MOTOR_REVERSE", {}).get("fl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("fr", True),
+        getattr(config, "MOTOR_REVERSE", {}).get("bl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("br", True),
+    ]
+    for i in range(4):
+        duty = duties[i]
+        if reverses[i]:
+            duty = -duty
+        motors[i].duty(duty)
 
 
-def print_startup_diagnostics(imu_owner, imu_read, imu_backend, chassis):
-	print("imu backend:", "ok" if imu_backend is not None else "missing")
-	print("gyro_offset:", getattr(imu_owner, "gyro_offset", None))
-	try:
-		sample = imu_read()
-	except Exception as e:
-		sample = {"error": repr(e)}
-	print("imu sample:", sample)
-	print("motor pins:")
-	print("fl", getattr(chassis.fl, "pwm_pin", "?"), getattr(chassis.fl, "dir_pin", "?"), "rev=", getattr(chassis.fl, "reverse", False))
-	print("fr", getattr(chassis.fr, "pwm_pin", "?"), getattr(chassis.fr, "dir_pin", "?"), "rev=", getattr(chassis.fr, "reverse", False))
-	print("bl", getattr(chassis.bl, "pwm_pin", "?"), getattr(chassis.bl, "dir_pin", "?"), "rev=", getattr(chassis.bl, "reverse", False))
-	print("br", getattr(chassis.br, "pwm_pin", "?"), getattr(chassis.br, "dir_pin", "?"), "rev=", getattr(chassis.br, "reverse", False))
+def angle_error(target, current):
+    err = float(target) - float(current)
+    while err > 180.0:
+        err -= 360.0
+    while err < -180.0:
+        err += 360.0
+    return err
 
 
-def motor_warmup(chassis, speed=45, ms=600):
-	print("motor warmup forward speed=", speed)
-	start = time.ticks_ms()
-	while time.ticks_diff(time.ticks_ms(), start) < ms:
-		chassis.forward(speed)
-		time.sleep_ms(20)
-	chassis.stop()
-	time.sleep_ms(300)
+def limit_step(target, current, limit):
+    delta = target - current
+    if delta > limit:
+        return current + limit
+    if delta < -limit:
+        return current - limit
+    return target
 
 
-def main():
-	board = MainControl(config)
-	chassis = build_chassis()
-	prepare_chassis(chassis)
-	imu_owner, imu_read, imu_calibrate, imu_backend = ensure_imu(board)
-
-	if bool(getattr(config, "HEADING_LOCK_CALIBRATE_IMU", True)) and callable(imu_calibrate):
-		print("imu calibrate; keep car still")
-		imu_calibrate()
-		print("imu calibrate done")
-
-	print_startup_diagnostics(imu_owner, imu_read, imu_backend, chassis)
-	wait_c14_start()
-
-	forward_speed = float(getattr(config, "HEADING_LOCK_TEST_FORWARD_SPEED", 45))
-	forward_speed *= float(getattr(config, "HEADING_LOCK_FORWARD_SIGN", -1.0))
-	kp = float(getattr(config, "HEADING_LOCK_YAW_KP", 1.2))
-	max_vw = float(getattr(config, "HEADING_LOCK_YAW_MAX_SPEED", 22))
-	sign = float(getattr(config, "HEADING_LOCK_YAW_SIGN", 1.0))
-
-	yaw = 0.0
-	target_yaw = 0.0
-	last_ms = time.ticks_ms()
-	start_ms = last_ms
-	last_print = last_ms
-
-	print(
-		"heading lock start",
-		"vx=", forward_speed,
-		"kp=", kp,
-		"max_vw=", max_vw,
-	)
-	print("press Ctrl+C / stop mpremote to end this test")
-	motor_warmup(chassis, speed=forward_speed)
-
-	try:
-		while True:
-			now = time.ticks_ms()
-			dt = max(1, time.ticks_diff(now, last_ms)) / 1000.0
-			last_ms = now
-
-			imu_data = imu_read()
-			gz = gyro_z_dps(imu_data)
-			yaw = (yaw + gz * dt) % 360.0
-			err = angle_error(target_yaw, yaw)
-			vw = clamp(err * kp * sign, -max_vw, max_vw)
-
-			chassis.move(forward_speed, 0, vw)
-
-			if time.ticks_diff(now, last_print) >= 200:
-				last_print = now
-				status = chassis.get_status()
-				wheels = status.get("wheels", {})
-				raw = imu_data.get("raw") if isinstance(imu_data, dict) else None
-				ok = imu_data.get("ok") if isinstance(imu_data, dict) else None
-				print(
-					"yaw={:.2f} err={:.2f} gz={:.2f} vx={:.1f} vw={:.2f} imu_ok={} raw_gz={} wheels={}".format(
-						yaw,
-						err,
-						gz,
-						forward_speed,
-						vw,
-						ok,
-						raw[5] if isinstance(raw, (tuple, list)) and len(raw) > 5 else None,
-						wheels,
-					)
-				)
-
-			time.sleep_ms(20)
-	finally:
-		chassis.stop()
-		print("heading lock done")
+def yaw_to_rotate_duty(err, gyro_z, last_rotate):
+    if abs(err) <= YAW_DEADBAND_DEG:
+        target = 0.0
+    else:
+        target = err * YAW_KP * YAW_SIGN + gyro_z * YAW_KD
+        if abs(target) < YAW_MIN_DUTY:
+            target = YAW_MIN_DUTY if target > 0 else -YAW_MIN_DUTY
+    target = clamp(target, -YAW_MAX_DUTY, YAW_MAX_DUTY)
+    filtered = last_rotate * (1.0 - ROT_FILTER_ALPHA) + target * ROT_FILTER_ALPHA
+    duty = limit_step(filtered, last_rotate, ROT_STEP_LIMIT)
+    if abs(duty) < 1:
+        return 0
+    return int(clamp(duty, -YAW_MAX_DUTY, YAW_MAX_DUTY))
 
 
-if __name__ == "__main__":
-	main()
+def imu_read_raw(imu):
+    try:
+        imu.read()
+    except Exception:
+        pass
+    try:
+        return imu.get()
+    except Exception:
+        return None
+
+
+def gyro_z_dps(imu):
+    raw = imu_read_raw(imu)
+    if raw and len(raw) > 5:
+        return float(raw[5]) * GYRO_RAW_TO_DPS, raw
+    return 0.0, raw
+
+
+motor_fl = MOTOR_CONTROLLER(MOTOR_CONTROLLER.PWM_D4_DIR_D5, 13000)
+motor_fr = MOTOR_CONTROLLER(MOTOR_CONTROLLER.PWM_D6_DIR_D7, 13000)
+motor_bl = MOTOR_CONTROLLER(MOTOR_CONTROLLER.PWM_C30_DIR_C31, 13000)
+motor_br = MOTOR_CONTROLLER(MOTOR_CONTROLLER.PWM_C28_DIR_C29, 13000)
+motors = [motor_fl, motor_fr, motor_bl, motor_br]
+
+
+print("board uid:", unique_id())
+print("script version: raw_heading_lock_like_chassis_raw_v1")
+print("raw motor channels ready")
+wait_c14_start()
+
+try:
+    # This must behave exactly like manual_chassis_raw.py forward.
+    step("forward probe", FORWARD_DUTIES, 1500)
+    stop_motors()
+    time.sleep_ms(500)
+
+    imu = IMU963RA()
+    print("imu ready")
+    for i in range(3):
+        print("imu sample{}:".format(i), imu_read_raw(imu))
+        time.sleep_ms(50)
+
+    print(
+        "heading lock params:",
+        "forward=", FORWARD_DUTIES,
+        "forward_only_ms=", FORWARD_ONLY_MS,
+        "kp=", YAW_KP,
+        "kd=", YAW_KD,
+        "min=", YAW_MIN_DUTY,
+        "max=", YAW_MAX_DUTY,
+        "deadband=", YAW_DEADBAND_DEG,
+        "sign=", YAW_SIGN,
+    )
+
+    yaw = 0.0
+    print("initial heading set to 0 deg")
+    start_ms = time.ticks_ms()
+    last_ms = start_ms
+    last_print = start_ms
+    filtered_gz = 0.0
+    rotate = 0
+
+    while True:
+        now = time.ticks_ms()
+        dt = max(1, time.ticks_diff(now, last_ms)) / 1000.0
+        last_ms = now
+
+        raw_gz, raw = gyro_z_dps(imu)
+        filtered_gz = filtered_gz * (1.0 - GYRO_FILTER_ALPHA) + raw_gz * GYRO_FILTER_ALPHA
+        yaw = (yaw + filtered_gz * dt) % 360.0
+        err = angle_error(TARGET_YAW_DEG, yaw)
+
+        if time.ticks_diff(now, start_ms) < FORWARD_ONLY_MS:
+            mode = "FORWARD"
+            rotate = 0
+        else:
+            mode = "LOCK"
+            rotate = yaw_to_rotate_duty(err, filtered_gz, rotate)
+
+        duties = add_rotate(FORWARD_DUTIES, rotate)
+        set_duties(duties)
+
+        if time.ticks_diff(now, last_print) >= 200:
+            last_print = now
+            print(
+                "{} yaw={:.2f} err={:.2f} gz={:.2f} rot={} raw_gz={} duties={}".format(
+                    mode,
+                    yaw,
+                    err,
+                    filtered_gz,
+                    rotate,
+                    raw[5] if raw and len(raw) > 5 else None,
+                    duties,
+                )
+            )
+        time.sleep_ms(20)
+finally:
+    stop_motors()
+    print("raw heading-lock test done")

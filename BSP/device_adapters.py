@@ -42,11 +42,19 @@ class IMUAdapter:
 			return {"gyro": None, "mag": None, "ok": False}
 
 		raw = _try_call(self.imu, ("get",))
-		if isinstance(raw, (tuple, list)) and len(raw) > 7:
-			return {
-				"gyro": (0.0, 0.0, float(raw[5]) * gyro_scale),
-				"mag": (float(raw[6]) * mag_scale, float(raw[7]) * mag_scale, 0.0),
-				"ok": True,
+                if isinstance(raw, (tuple, list)) and len(raw) >= 6:
+                        # Assumes format: (ax, ay, az, gx, gy, gz, mx, my, mz) or similar
+                        ax, ay, az = float(raw[0]), float(raw[1]), float(raw[2])
+                        gx, gy, gz = float(raw[3]), float(raw[4]), float(raw[5])
+                        
+                        mag_data = (0.0, 0.0, 0.0)
+                        if len(raw) >= 8:
+                            mag_data = (float(raw[6]) * mag_scale, float(raw[7]) * mag_scale, 0.0)
+                            
+                        return {
+                                "accel": (ax, ay, az),
+                                "gyro": (gx * gyro_scale, gy * gyro_scale, gz * gyro_scale), 
+                                "mag": mag_data,
 			}
 
 		gyro = _try_call(self.imu, ("gyro", "get_gyro", "gyro_read", "read_gyro", "readGyro"))

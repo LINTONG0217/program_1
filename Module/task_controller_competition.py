@@ -54,6 +54,7 @@ class CompetitionController(SmartCarController):
 		self.mission_return_stable_ms = None
 		self.drop_points = []
 		self.center_yaw_lock = None
+		self.push_yaw_lock = None
 		self.center_nav_start_ms = None
 		self.center_stable_start_ms = None
 		self._center_pose_warned = False
@@ -101,6 +102,43 @@ class CompetitionController(SmartCarController):
 			-vx_world * sin_a + vy_world * cos_a,
 		)
 
+	def _heading_lock_vw(self, target_yaw, current_yaw, prefix="CENTER"):
+		deadband = float(getattr(self.cfg, prefix + "_YAW_DEADBAND_DEG", getattr(self.cfg, "CENTER_YAW_DEADBAND_DEG", 1.5)))
+		err = self._angle_error(target_yaw, current_yaw)
+		if abs(err) <= deadband:
+			return 0.0, err
+		kp = float(getattr(self.cfg, prefix + "_YAW_KP", getattr(self.cfg, "CENTER_YAW_KP", 1.2)))
+		limit = float(getattr(self.cfg, prefix + "_YAW_MAX_SPEED", getattr(self.cfg, "CENTER_YAW_MAX_SPEED", 24.0)))
+		sign = float(getattr(self.cfg, prefix + "_YAW_SIGN", getattr(self.cfg, "HEADING_LOCK_YAW_SIGN", 1.0)))
+		return clamp(err * kp * sign, -limit, limit), err
+
+	def _snap_cardinal_yaw(self, yaw):
+		cardinals = (0.0, 90.0, 180.0, 270.0)
+		return min(cardinals, key=lambda item: abs(self._angle_error(item, yaw)))
+
+	def _nearest_boundary_yaw(self, pose):
+		if not pose:
+			return 0.0
+		x = float(pose.get("x", 0.0))
+		y = float(pose.get("y", 0.0))
+		field_x = float(getattr(self.cfg, "FIELD_SIZE_X_M", 3.2))
+		field_y = float(getattr(self.cfg, "FIELD_SIZE_Y_M", 2.8))
+		distances = (
+			(x, 180.0),
+			(max(0.0, field_x - x), 0.0),
+			(y, 270.0),
+			(max(0.0, field_y - y), 90.0),
+		)
+		return min(distances, key=lambda item: item[0])[1]
+
+	def _select_push_yaw_lock(self, pose, yaw):
+		mode = getattr(self.cfg, "PUSH_CARDINAL_MODE", "nearest_boundary")
+		if mode == "fixed":
+			return self._snap_cardinal_yaw(float(getattr(self.cfg, "PUSH_LOCK_YAW_DEG", 0.0)))
+		if mode == "current":
+			return self._snap_cardinal_yaw(yaw)
+		return self._nearest_boundary_yaw(pose)
+
 	def _center_enabled(self):
 		return bool(getattr(self.cfg, "CENTER_FIRST_ENABLE", False))
 
@@ -132,7 +170,7 @@ class CompetitionController(SmartCarController):
 			else:
 				self.center_yaw_lock = float(getattr(self.cfg, "CENTER_LOCK_YAW_DEG", getattr(self.cfg, "NAV_LOCK_YAW_DEG", 0.0)))
 
-		yaw_err = self._angle_error(self.center_yaw_lock, yaw)
+		vw, yaw_err = self._heading_lock_vw(self.center_yaw_lock, yaw, "CENTER")
 		pos_tol = float(getattr(self.cfg, "CENTER_NAV_TOLERANCE_M", 0.08))
 		yaw_tol = float(getattr(self.cfg, "CENTER_YAW_TOLERANCE_DEG", 5.0))
 		if dist <= pos_tol and abs(yaw_err) <= yaw_tol:
@@ -174,12 +212,6 @@ class CompetitionController(SmartCarController):
 			vy_world = 0.0
 
 		vx_body, vy_body = self._world_to_body(vx_world, vy_world, yaw)
-		yaw_deadband = float(getattr(self.cfg, "CENTER_YAW_DEADBAND_DEG", 1.5))
-		if abs(yaw_err) <= yaw_deadband:
-			vw = 0.0
-		else:
-			vw = yaw_err * float(getattr(self.cfg, "CENTER_YAW_KP", 1.2))
-			vw = clamp(vw, -float(getattr(self.cfg, "CENTER_YAW_MAX_SPEED", 24.0)), float(getattr(self.cfg, "CENTER_YAW_MAX_SPEED", 24.0)))
 
 		self.chassis.move(vx_body, vy_body, vw)
 
@@ -454,6 +486,7 @@ class CompetitionController(SmartCarController):
 			self.completed_push_count += 1
 			print("push cycle done", "count=", self.completed_push_count)
 			self.push_start_ms = None
+			self.push_yaw_lock = None
 			self._start_retreat_then_search()
 			return
 
@@ -470,6 +503,20 @@ class CompetitionController(SmartCarController):
 		safe_lateral = float(getattr(self.cfg, "ASSIST_SAFE_LATERAL_LIMIT", 15))
 		vy = clamp(vy, -safe_lateral, safe_lateral)
 		vx = self.cfg.PUSH_SPEED
+		vw = 0.0
+		yaw_err = 0.0
+		if bool(getattr(self.cfg, "PUSH_HEADING_LOCK_ENABLE", True)):
+			pose = self._get_pose()
+			if pose:
+				yaw = float(pose.get("yaw", 0.0))
+				if self.push_yaw_lock is None:
+					self.push_yaw_lock = self._select_push_yaw_lock(pose, yaw)
+					print("push yaw lock:", self.push_yaw_lock)
+				vw, yaw_err = self._heading_lock_vw(self.push_yaw_lock, yaw, "PUSH")
+
+		if bool(getattr(self.cfg, "PUSH_ALIGN_YAW_BEFORE_MOVE", True)) and abs(yaw_err) > float(getattr(self.cfg, "PUSH_YAW_ALIGN_TOLERANCE_DEG", 8.0)):
+			self.chassis.move(0, 0, vw)
+			return
 
 		if obstacle_state.get("front") or distance_hit:
 			vx = clamp(self.cfg.PUSH_SPEED * 0.6, 0, 100)
@@ -478,7 +525,7 @@ class CompetitionController(SmartCarController):
 			elif obstacle_state.get("right"):
 				vy = -self.cfg.AVOID_STRAFE_SPEED * 0.4
 
-		self.chassis.move(vx, vy, 0)
+		self.chassis.move(vx, vy, vw)
 
 	def _return_home_step(self):
 		now = time.ticks_ms()
@@ -557,6 +604,8 @@ class CompetitionController(SmartCarController):
 			self.center_yaw_lock = None
 			self.center_nav_start_ms = None
 			self.center_stable_start_ms = None
+		if new_state != self.STATE_COOP_PUSH:
+			self.push_yaw_lock = None
 
 		if new_state == self.STATE_WAIT_BOTH_READY:
 			self.push_start_ms = None

@@ -66,9 +66,9 @@ class PoseEstimator:
 		fr = float(wheel_speeds.get("fr", 0.0))
 		bl = float(wheel_speeds.get("bl", 0.0))
 		br = float(wheel_speeds.get("br", 0.0))
-		vx = (fl + fr + bl + br) / 4.0
-		vy = (fl - fr - bl + br) / 4.0
-		vw = (fl - fr + bl - br) / 4.0
+		vx = (fl - fr + bl - br) / 4.0
+		vy = (-fl - fr + bl + br) / 4.0
+		vw = (fl + fr + bl + br) / 4.0
 		return vx, vy, vw
 
 	def _safe_mag_angle(self, mag):

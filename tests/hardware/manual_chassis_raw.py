@@ -55,8 +55,8 @@ try:
     # 与你原工程一致的极性方向（fr, br 取反）
     step("forward", [7000, -7000, 7000, -7000])
     step("backward", [-7000, 7000, -7000, 7000])
-    step("strafe right", [7000, 7000, -7000, -7000])
-    step("strafe left", [-7000, -7000, 7000, 7000])
+    step("strafe right", [-7000, -7000, 7000, 7000])
+    step("strafe left", [7000, 7000, -7000, -7000])
     step("rotate cw", [7000, 7000, 7000, 7000])
     step("rotate ccw", [-7000, -7000, -7000, -7000])
 finally:

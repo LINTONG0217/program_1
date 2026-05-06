@@ -91,6 +91,7 @@ class IMUDevice:
 		self.imu = self._create_imu()
 		self.adapter = IMUAdapter(self.imu)
 		self.gyro_offset = 0.0
+		self._calibrated_once = False
 
 	def _create_imu(self):
 		if IMU963RX is None:
@@ -136,18 +137,76 @@ class IMUDevice:
 		if self.imu is None:
 			return
 
-		warmup = getattr(self.cfg, "GYRO_CALIBRATION_WARMUP", 20)
-		sample_count = getattr(self.cfg, "GYRO_CALIBRATION_SAMPLES", 100)
+		# 注意：某些固件/连线状态下 imu.read() 可能阻塞，导致启动“卡死”。
+		# 校准阶段只用 get() 采样，避免阻塞；并加超时兜底。
+		warmup = int(getattr(self.cfg, "GYRO_CALIBRATION_WARMUP", 20))
+		sample_count = int(getattr(self.cfg, "GYRO_CALIBRATION_SAMPLES", 100))
+		timeout_ms = int(getattr(self.cfg, "GYRO_CALIBRATION_TIMEOUT_MS", 2500))
+		interval_ms = int(getattr(self.cfg, "GYRO_CALIBRATION_INTERVAL_MS", 10))
+		interval_ms = max(1, interval_ms)
+
+		now_ms = getattr(time, "ticks_ms", None)
+		ticks_diff = getattr(time, "ticks_diff", None)
+		if not callable(now_ms):
+			now_ms = lambda: int(time.time() * 1000)
+		if not callable(ticks_diff):
+			ticks_diff = lambda a, b: int(a) - int(b)
+
+		start_ms = now_ms()
 		total = 0.0
+		got = 0
 
-		for _ in range(warmup):
-			self._read_raw()
-		for _ in range(sample_count):
-			raw = self._read_raw()
-			total += raw[5] if raw and len(raw) > 5 else 0.0
-			time.sleep_ms(10) if hasattr(time, "sleep_ms") else time.sleep(0.01)
+		# warmup
+		for _ in range(max(0, warmup)):
+			_ = self._read_raw_quick()
+			if timeout_ms > 0 and ticks_diff(now_ms(), start_ms) >= timeout_ms:
+				break
+			time.sleep_ms(interval_ms) if hasattr(time, "sleep_ms") else time.sleep(interval_ms / 1000.0)
 
-		self.gyro_offset = total / max(1, sample_count)
+		# sample
+		for i in range(max(0, sample_count)):
+			raw = self._read_raw_quick()
+			if raw and isinstance(raw, (tuple, list)) and len(raw) > 5:
+				try:
+					total += float(raw[5])
+					got += 1
+				except Exception:
+					pass
+			if (i + 1) % 20 == 0:
+				try:
+					print("imu calibrate: sample", i + 1, "/", sample_count, "got=", got)
+				except Exception:
+					pass
+			if timeout_ms > 0 and ticks_diff(now_ms(), start_ms) >= timeout_ms:
+				try:
+					print("imu calibrate: timeout", "got=", got)
+				except Exception:
+					pass
+				break
+			time.sleep_ms(interval_ms) if hasattr(time, "sleep_ms") else time.sleep(interval_ms / 1000.0)
+
+		if got > 0:
+			self.gyro_offset = total / float(got)
+			self._calibrated_once = True
+		else:
+			# 没拿到数据：不要卡死，直接用 0 偏置继续跑。
+			self.gyro_offset = 0.0
+			try:
+				print("imu calibrate: no samples; gyro_offset=0")
+			except Exception:
+				pass
+
+	def _read_raw_quick(self):
+		"""Calibration-safe raw read: call get() only (no imu.read())."""
+		if self.imu is None:
+			return None
+		getter = getattr(self.imu, "get", None)
+		if callable(getter):
+			try:
+				return getter()
+			except Exception:
+				return None
+		return None
 
 	def _read_raw(self):
 		if self.imu is None:

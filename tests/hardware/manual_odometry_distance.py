@@ -20,7 +20,7 @@ except Exception as e:
     MAINCONTROL_IMPORT_ERROR = e
 
 
-FORWARD_DUTIES = [-3200, 3200, -3200, 3200]
+FORWARD_DUTIES = [3200, -3200, 3200, -3200]
 TARGET_DISTANCE_M = 0.50
 MAX_RUN_MS = 6000
 PRINT_MS = 200
@@ -61,8 +61,15 @@ def stop_motors(motors):
 
 
 def set_duties(motors, duties):
+    reverses = [
+        getattr(config, "MOTOR_REVERSE", {}).get("fl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("fr", True),
+        getattr(config, "MOTOR_REVERSE", {}).get("bl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("br", True),
+    ]
     for i in range(4):
-        motors[i].duty(int(duties[i]))
+        duty = -duties[i] if reverses[i] else duties[i]
+        motors[i].duty(int(duty))
 
 
 def snapshot(board):
@@ -71,7 +78,7 @@ def snapshot(board):
 
 def main():
     print("board uid:", unique_id())
-    print("script version: manual_odometry_distance_v1")
+    print("script version: manual_odometry_distance_v2")
     if MainControl is None:
         print("MainControl import failed:", repr(MAINCONTROL_IMPORT_ERROR))
         print("Please upload/sync BSP/board_runtime.py and BSP/device_adapters.py to the board first.")

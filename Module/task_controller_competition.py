@@ -202,6 +202,11 @@ class CompetitionController(SmartCarController):
 		min_speed = float(getattr(self.cfg, "CENTER_NAV_MIN_SPEED", 10.0))
 		vx_world = clamp(ex * kp, -max_speed, max_speed)
 		vy_world = clamp(ey * kp, -max_speed, max_speed)
+		if bool(getattr(self.cfg, "CENTER_NAV_AXIS_SEQUENCE_ENABLE", False)) and dist > pos_tol:
+			if abs(ex) > pos_tol:
+				vy_world = 0.0
+			else:
+				vx_world = 0.0
 		if dist > pos_tol:
 			if abs(vx_world) > 0 and abs(vx_world) < min_speed:
 				vx_world = min_speed if vx_world > 0 else -min_speed
@@ -493,9 +498,9 @@ class CompetitionController(SmartCarController):
 		obstacle_state, distance_hit = self._obstacle_detected()
 
 		if zone and target:
-			pair_error = zone["offset_x"] - target["offset_x"]
+			pair_error = self._signed_offset_x(zone) - self._signed_offset_x(target)
 		elif target:
-			pair_error = target["offset_x"]
+			pair_error = self._signed_offset_x(target)
 		else:
 			pair_error = 0
 

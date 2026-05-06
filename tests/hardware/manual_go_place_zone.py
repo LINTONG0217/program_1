@@ -19,10 +19,10 @@ except Exception as e:
     MAINCONTROL_IMPORT_ERROR = e
 
 
-FORWARD_DUTIES = [-3200, 3200, -3200, 3200]
+FORWARD_DUTIES = [3200, -3200, 3200, -3200]
 STRAFE_DUTIES = [-3000, -3000, 3000, 3000]
-TARGET_X_M = 1.35
-TARGET_Y_M = 1.15
+TARGET_X_M = 1.00
+TARGET_Y_M = 1.50
 PRINT_MS = 250
 
 
@@ -48,8 +48,15 @@ def build_motors():
 
 
 def set_duties(motors, duties):
+    reverses = [
+        getattr(config, "MOTOR_REVERSE", {}).get("fl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("fr", True),
+        getattr(config, "MOTOR_REVERSE", {}).get("bl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("br", True),
+    ]
     for i in range(4):
-        motors[i].duty(int(duties[i]))
+        duty = -duties[i] if reverses[i] else duties[i]
+        motors[i].duty(int(duty))
 
 
 def stop_motors(motors):
@@ -86,7 +93,7 @@ def drive_until_distance(board, motors, duties, target_m, label):
 
 def main():
     print("board uid:", unique_id())
-    print("script version: manual_go_place_zone_v1")
+    print("script version: manual_go_place_zone_v3")
     if MainControl is None:
         print("MainControl import failed:", repr(MAINCONTROL_IMPORT_ERROR))
         print("Please upload/sync BSP/board_runtime.py and BSP/device_adapters.py to the board first.")

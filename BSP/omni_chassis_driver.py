@@ -127,10 +127,14 @@ class OmniChassis:
 		self.last_vw = vw
 		self.last_command_ms = time.ticks_ms()
 
-		v_fl = vx + vy + vw
-		v_fr = vx - vy - vw
-		v_bl = vx - vy + vw
-		v_br = vx + vy - vw
+		drive_vx = vx * float(getattr(self.cfg, "CHASSIS_VX_SIGN", 1.0)) if self.cfg else vx
+		drive_vy = vy * float(getattr(self.cfg, "CHASSIS_VY_SIGN", 1.0)) if self.cfg else vy
+		drive_vw = vw * float(getattr(self.cfg, "CHASSIS_VW_SIGN", 1.0)) if self.cfg else vw
+
+		v_fl = drive_vx + drive_vy + drive_vw
+		v_fr = -drive_vx + drive_vy + drive_vw
+		v_bl = drive_vx - drive_vy + drive_vw
+		v_br = -drive_vx - drive_vy + drive_vw
 		self.wheel_targets = {"fl": v_fl, "fr": v_fr, "bl": v_bl, "br": v_br}
 
 		max_v = max(abs(v_fl), abs(v_fr), abs(v_bl), abs(v_br))
@@ -153,14 +157,14 @@ class OmniChassis:
 				self.wheel_feedback[name] = measured[name]
 
 			# 1. 估算当前底盘整体速度 (EstimateSpeed 逆运动学)
-			now_vx = (measured["fl"] + measured["fr"] + measured["bl"] + measured["br"]) * 0.25
-			now_vy = (measured["fl"] - measured["fr"] - measured["bl"] + measured["br"]) * 0.25
-			now_vw = (measured["fl"] - measured["fr"] + measured["bl"] - measured["br"]) * 0.25
+			now_vx = (measured["fl"] - measured["fr"] + measured["bl"] - measured["br"]) * 0.25
+			now_vy = (measured["fl"] + measured["fr"] - measured["bl"] - measured["br"]) * 0.25
+			now_vw = (measured["fl"] + measured["fr"] + measured["bl"] + measured["br"]) * 0.25
 
 			# 2. 计算底盘各轴动态输出 (ChassisOutput_Dynamic)
-			force_x = self.vx_pid.update(vx - now_vx)
-			force_y = self.vy_pid.update(vy - now_vy)
-			torque_w = self.vw_pid.update(vw - now_vw)
+			force_x = self.vx_pid.update(drive_vx - now_vx)
+			force_y = self.vy_pid.update(drive_vy - now_vy)
+			torque_w = self.vw_pid.update(drive_vw - now_vw)
 
 			# 3. 动力学重分配 + 阻尼 (模拟 C 代码力矩分配逻辑与阻尼项)
 			damp = getattr(self.cfg, "WHEEL_SPEED_LIMIT_DAMP", 0.035)
@@ -168,9 +172,9 @@ class OmniChassis:
 			# 前馈预估(由于我们输出占空比而非直接发送电流) + 独立计算闭环控制量 + 极小阻尼控制
 			# 注意: 配置中已针对 fr, br 进行硬件极性翻转，所以解算矩阵保持常规形式
 			cmd_fl = v_fl + force_x + force_y + torque_w + damp * (v_fl - measured["fl"])
-			cmd_fr = v_fr + force_x - force_y - torque_w + damp * (v_fr - measured["fr"])
+			cmd_fr = v_fr - force_x + force_y + torque_w + damp * (v_fr - measured["fr"])
 			cmd_bl = v_bl + force_x - force_y + torque_w + damp * (v_bl - measured["bl"])
-			cmd_br = v_br + force_x + force_y - torque_w + damp * (v_br - measured["br"])
+			cmd_br = v_br - force_x - force_y + torque_w + damp * (v_br - measured["br"])
 
 			commands["fl"] = clamp(cmd_fl, -100, 100)
 			commands["fr"] = clamp(cmd_fr, -100, 100)

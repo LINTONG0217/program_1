@@ -101,9 +101,9 @@ class OmniController:
 		fr = wheel_speeds[1] if len(wheel_speeds) > 1 else 0.0
 		bl = wheel_speeds[2] if len(wheel_speeds) > 2 else 0.0
 		br = wheel_speeds[3] if len(wheel_speeds) > 3 else 0.0
-		vx = (fl + fr + bl + br) / 4.0
-		vy = (-fl + fr + bl - br) / 4.0
-		vw = (-fl + fr - bl + br) / 4.0
+		vx = (fl - fr + bl - br) / 4.0
+		vy = (-fl - fr + bl + br) / 4.0
+		vw = (fl + fr + bl + br) / 4.0
 		return vx, vy, vw
 
 	def _world_to_body(self, vx_world, vy_world, curr_yaw_deg):
@@ -140,10 +140,10 @@ class OmniController:
 		vw_cmd = clamp(vw_cmd, -self.max_rotate, self.max_rotate)
 
 		wheel_targets = [
-			vx_cmd - vy_cmd - vw_cmd,
 			vx_cmd + vy_cmd + vw_cmd,
-			vx_cmd + vy_cmd - vw_cmd,
+			-vx_cmd + vy_cmd + vw_cmd,
 			vx_cmd - vy_cmd + vw_cmd,
+			-vx_cmd - vy_cmd + vw_cmd,
 		]
 
 		max_abs_target = max(1.0, max(abs(value) for value in wheel_targets))

@@ -47,11 +47,12 @@ def stop_motors(motors):
 
 
 def drive(motors, forward, strafe):
-    # Raw omni mix matching manual_chassis_raw.py polarity.
-    fl = -forward - strafe
-    fr = forward - strafe
-    bl = -forward + strafe
-    br = forward + strafe
+    # Positive strafe means physical right on this car.
+    drive_strafe = -strafe
+    fl = forward + drive_strafe
+    fr = -forward + drive_strafe
+    bl = forward - drive_strafe
+    br = -forward - drive_strafe
     duties = [fl, fr, bl, br]
     reverses = [
         getattr(config, "MOTOR_REVERSE", {}).get("fl", False),
@@ -69,7 +70,7 @@ def drive(motors, forward, strafe):
 
 def main():
     print("board uid:", unique_id())
-    print("script version: manual_approach_object_v1")
+    print("script version: manual_approach_object_v3")
     motors = build_motors()
     vision = VisionReceiver(config.VISION_UART_ID, config.VISION_BAUDRATE, config.VISION_TX_PIN, config.VISION_RX_PIN, config.FRAME_WIDTH, config.FRAME_HEIGHT)
     wait_c14_start()

@@ -8,7 +8,7 @@ class WheelOdometryTest(unittest.TestCase):
 		odom = AdvancedOdometry()
 		odom.reset(0.0)
 
-		odom.update([1.0, 1.0, 1.0, 1.0], 0.0, dt=1.0)
+		odom.update([1.0, -1.0, 1.0, -1.0], 0.0, dt=1.0)
 
 		x, y, yaw = odom.get_position()
 		self.assertAlmostEqual(x, 1.0)
@@ -20,7 +20,7 @@ class WheelOdometryTest(unittest.TestCase):
 		odom = AdvancedOdometry()
 		odom.reset(0.0)
 
-		odom.update([1.0, -1.0, -1.0, 1.0], 0.0, dt=1.0)
+		odom.update([-1.0, -1.0, 1.0, 1.0], 0.0, dt=1.0)
 
 		x, y, _ = odom.get_position()
 		self.assertAlmostEqual(x, 0.0)
@@ -31,7 +31,7 @@ class WheelOdometryTest(unittest.TestCase):
 		odom = AdvancedOdometry()
 		odom.reset(0.0)
 
-		odom.update([1.0, 1.0, 1.0, 1.0], 90.0, dt=1.0)
+		odom.update([1.0, -1.0, 1.0, -1.0], 90.0, dt=1.0)
 
 		x, y, _ = odom.get_position()
 		self.assertAlmostEqual(x, 0.0, places=6)

@@ -53,9 +53,9 @@ def main():
     # 右偏时先减小右侧输出：fr/br < 1.0
     chassis.wheel_trim = {
         "fl": 1.00,
-        "fr": 0.94,
+        "fr": 1.00,
         "bl": 1.00,
-        "br": 0.94,
+        "br": 1.00,
     }
     chassis.attach_feedback(encoders=None, imu=None)
 

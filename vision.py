@@ -10,13 +10,32 @@ try:
 except Exception:
     from pyb import UART
 
-print("VISION_SCRIPT_V3")
+print("VISION_SCRIPT_BLUE_SQUARE_V8")
 
 
 # 调试开关：OpenART 上频繁 print 会显著降帧，反而更容易“球在但识别不出”。
-DEBUG_PRINT = False
+DEBUG_PRINT = True
 DEBUG_PRINT_EVERY_MS = 800
 _dbg_last_ms = time.ticks_ms()
+
+
+def _dbg_print(*args):
+    """节流打印：避免 OpenART 高频 print 降帧导致漏检。"""
+    global _dbg_last_ms
+    if not DEBUG_PRINT:
+        return
+    try:
+        now = time.ticks_ms()
+        if time.ticks_diff(now, _dbg_last_ms) < int(DEBUG_PRINT_EVERY_MS):
+            return
+        _dbg_last_ms = now
+    except Exception:
+        # 若固件不支持 ticks_diff/ticks_ms，就退化为不节流
+        pass
+    try:
+        print(*args)
+    except Exception:
+        pass
 
 
 # ================= 串口发送配置 =================
@@ -75,7 +94,8 @@ sensor.set_framesize(sensor.QVGA)  # 320x240
 sensor.skip_frames(time=1500)
 sensor.set_auto_whitebal(False)
 # 现场偏暗时可开启自动增益以提升可见度（注意：可能改变颜色，若颜色漂移严重可设为 False）
-AUTO_GAIN = True
+AUTO_GAIN = False
+# 关闭自动增益以避免颜色漂移影响阈值稳定性（现场测试更稳定）
 sensor.set_auto_gain(AUTO_GAIN)
 
 # 多候选颜色阈值：针对现场偏绿/偏暗场景做收敛
@@ -88,6 +108,29 @@ TH_BALLS = [
     # 亮场偏绿黄（仍偏绿，避免纯黄边界线误检）
     (20, 100, -75, -5, -50, 90),
 ]
+ENABLE_BALL_DETECT = True
+
+# 蓝色方块阈值：现场测试结果
+# 推荐使用你提供的阈值（LAB 空间）
+# 调整为捕捉偏紫蓝色（场地较亮时）
+# 蓝色通常对应 LAB 的 b 为负值（偏蓝），木地板/偏黄背景的 b 往往偏正。
+# 这里把 B_max 收紧，减少背景误检；如现场偏紫导致漏检，再放宽到 8~12。
+TH_BLUE = [
+    # 严格优先：减少木地板/偏黄背景
+    (15, 85, -70, 55, -80, 6),
+    # 精准阈值（基于你测得的蓝方块）
+    (21, 75, -51, 46, -69, 22),
+    # 偏紫/光照变化时的宽松备选
+    (15, 80, -55, 50, -75, 26),
+]
+ENABLE_BLUE_BLOCK_DETECT = False
+
+# 白色区域阈值：用于识别物体中间的白色数字/白色标记
+TH_WHITE = [
+    (70, 100, -8, 8, -8, 8),
+    (60, 100, -12, 12, -12, 12),
+]
+ENABLE_WHITE_DETECT = False
 
 # 黄线/边界（黄色胶带）阈值：用于“出界判断”，不参与网球识别
 # 这个阈值需要现场微调；若检测不到黄线，先只用 EDGE_OUT_MARGIN 退化判定。
@@ -118,6 +161,22 @@ SMOOTH_ALPHA = 0.45     # 平滑系数，降低以提高响应
 # 建议保持很小：1~2 帧（25Hz 下约 40~80ms），避免球消失后仍长时间“沿旧目标冲”。
 LOST_HOLD_FRAMES = 2
 
+# 蓝方块分支的额外门限（专门用来压木地板误检）
+# 白色数字会把蓝色区域“挖空”，导致蓝色像素变少、blob 变碎；这里适当放宽门限。
+BLUE_PIXELS_THRESHOLD = 6
+BLUE_AREA_THRESHOLD = 18
+BLUE_MIN_PIXELS = 30
+
+# 关键：木地板/偏黄背景在你日志里常见 b_mean≈11~12，
+# 之前的 <=12 会把它们放行；这里收紧到 6。
+BLUE_LAB_B_MEAN_MAX = 6   # 主要门槛：b_mean <= 6 认为偏蓝/偏紫蓝
+BLUE_LAB_B_HARD_MAX = 10  # 兜底上限：b_mean <= 10 才有资格再结合 a_mean 放行
+BLUE_LAB_A_MIN_IF_B_POS = 12  # 当 b_mean 偏正但仍在 HARD_MAX 内时，需要 a_mean 足够大才认为“紫蓝”
+
+# 边缘 LAB 采样（避开中间白色数字）
+BLUE_BORDER_B_MEAN_MAX = 6
+BLUE_BORDER_MIN_HITS = 4
+
 
 def _blob_score(b):
     w = max(1, int(b.w()))
@@ -147,6 +206,208 @@ def _blob_score(b):
     # 分数越高越像网球：面积大优先；更强调接近圆形
     square_penalty = abs(aspect - 1.0)
     return b.pixels() * (1.0 - 0.35 * square_penalty) * (0.75 + 0.25 * fill_ratio)
+
+
+def _square_score(b):
+    # 更强调接近正方形与填充率，适用于方块评分
+    w = max(1, int(b.w()))
+    h = max(1, int(b.h()))
+    size = max(w, h)
+    if size < MIN_SIZE or size > MAX_SIZE:
+        return -1
+
+    aspect = w / float(h)
+    if aspect < 0.6 or aspect > 1.6:
+        return -1
+
+    fill_ratio = b.pixels() / float(w * h)
+    if fill_ratio < 0.12:
+        return -1
+
+    square_penalty = abs(aspect - 1.0)
+    return b.pixels() * (1.0 - 0.6 * square_penalty) * (0.85 + 0.15 * fill_ratio)
+
+
+def _blue_square_score(b):
+    """蓝方块候选评分：比 _square_score 更严格，用于压假阳性（木地板纹理等）。"""
+    try:
+        x = int(b.x())
+        y = int(b.y())
+        w = max(1, int(b.w()))
+        h = max(1, int(b.h()))
+    except Exception:
+        return -1
+
+    size = max(w, h)
+    if size < MIN_SIZE or size > MAX_SIZE:
+        return -1
+
+    # 排除特别小的碎片（地板纹理常见）
+    try:
+        if int(b.pixels()) < BLUE_MIN_PIXELS:
+            return -1
+    except Exception:
+        pass
+
+    # 贴边目标更容易是地面/边缘噪声
+    try:
+        if x <= 1 or y <= 1 or (x + w) >= (FRAME_W - 2) or (y + h) >= (FRAME_H - 2):
+            return -1
+    except Exception:
+        pass
+
+    aspect = w / float(h)
+    # 蓝方块更强调接近正方形
+    if aspect < 0.72 or aspect > 1.38:
+        return -1
+
+    try:
+        fill_ratio = b.pixels() / float(w * h)
+    except Exception:
+        return -1
+
+    # 白色数字会显著降低 fill_ratio（蓝色只剩边缘/一部分），
+    # 因此这里放宽 fill_ratio 门限；木地板误检主要靠 LAB 颜色确认压制。
+    min_fill = 0.07
+    if (w * h) >= 1800:
+        min_fill = 0.09
+    if (w * h) >= 4500:
+        min_fill = 0.11
+    if fill_ratio < min_fill:
+        return -1
+
+    square_penalty = abs(aspect - 1.0)
+    return b.pixels() * (1.0 - 0.75 * square_penalty) * (0.90 + 0.10 * fill_ratio)
+
+
+def _roi_lab_means(img_src, blob):
+    """返回 (l_mean, a_mean, b_mean) 或 None。"""
+    try:
+        st = img_src.get_statistics(roi=blob.rect())
+        l_mean = int(st.l_mean())
+        a_mean = int(st.a_mean())
+        b_mean = int(st.b_mean())
+        return (l_mean, a_mean, b_mean)
+    except Exception:
+        return None
+
+
+def _is_blue_by_roi_lab(img_src, blob):
+    """基于整块 ROI 的 LAB 均值做蓝色确认（会被白字稀释，但可作为补充）。"""
+    means = _roi_lab_means(img_src, blob)
+    if means is None:
+        return False
+    try:
+        _l, _a, _b = int(means[0]), int(means[1]), int(means[2])
+    except Exception:
+        return False
+
+    # 典型蓝/紫蓝：b 应该明显偏负；如果 b 偏正（偏黄），必须非常谨慎
+    if _b <= int(BLUE_LAB_B_MEAN_MAX):
+        return True
+    if _b <= int(BLUE_LAB_B_HARD_MAX) and _a >= int(BLUE_LAB_A_MIN_IF_B_POS):
+        return True
+    return False
+
+
+def _is_blue_by_border_lab(img_src, blob):
+    """用边缘小 ROI 的 LAB b_mean 确认蓝色（避开中心白色数字）。"""
+    try:
+        x = int(blob.x())
+        y = int(blob.y())
+        w = max(1, int(blob.w()))
+        h = max(1, int(blob.h()))
+    except Exception:
+        return False
+
+    # 8 个边缘点（不取中心），每个点用 5x5 ROI 做统计，抗噪声
+    pts = [
+        (x + 2, y + 2),
+        (x + w // 2, y + 2),
+        (x + w - 3, y + 2),
+        (x + 2, y + h // 2),
+        (x + w - 3, y + h // 2),
+        (x + 2, y + h - 3),
+        (x + w // 2, y + h - 3),
+        (x + w - 3, y + h - 3),
+    ]
+    hits = 0
+    total = 0
+    for px, py in pts:
+        try:
+            # 5x5 ROI around point
+            rx = max(0, min(FRAME_W - 5, px - 2))
+            ry = max(0, min(FRAME_H - 5, py - 2))
+            st = img_src.get_statistics(roi=(rx, ry, 5, 5))
+            bb = int(st.b_mean())
+            total += 1
+            if bb <= int(BLUE_BORDER_B_MEAN_MAX):
+                hits += 1
+        except Exception:
+            pass
+
+    return total >= 5 and hits >= int(BLUE_BORDER_MIN_HITS)
+
+
+def _is_blue_by_border(img_src, blob):
+    """用方块边缘而不是中心做蓝色确认，避免白色数字干扰。"""
+    try:
+        x = int(blob.x())
+        y = int(blob.y())
+        w = max(1, int(blob.w()))
+        h = max(1, int(blob.h()))
+    except Exception:
+        return False
+
+    # 取四边和四角附近的 9 个点，避开中心白色数字区域
+    pts = [
+        (x + 2, y + 2),
+        (x + w // 2, y + 2),
+        (x + w - 3, y + 2),
+        (x + 2, y + h // 2),
+        (x + w - 3, y + h // 2),
+        (x + 2, y + h - 3),
+        (x + w // 2, y + h - 3),
+        (x + w - 3, y + h - 3),
+        (x + w // 2, y + h // 2),
+    ]
+
+    blue_hits = 0
+    total = 0
+    for px, py in pts:
+        try:
+            p = img_src.get_pixel(px, py)
+            if isinstance(p, tuple):
+                r, g, b = p
+            else:
+                r = g = b = p
+            total += 1
+            # 蓝色确认（容忍偏紫/偏暗，但要明显“蓝占优”）：
+            # - 场地木地板通常 R/G 更高，b 不会占优
+            # - 蓝方块在偏暗时 b 不一定很高，因此用 dominance 条件
+            dom = b - (r if r >= g else g)
+            if (b >= 25 and dom >= 6) or (b >= 45 and dom >= 2):
+                blue_hits += 1
+        except Exception:
+            pass
+
+    # 边缘点采样容易受反光/噪声影响；这里只作为“没有 LAB 统计时”的兜底。
+    return total >= 5 and blue_hits >= 4
+
+
+def _is_white_blob(blob):
+    try:
+        w = max(1, int(blob.w()))
+        h = max(1, int(blob.h()))
+    except Exception:
+        return False
+    # 白色通常亮度高、颜色通道差异小
+    if w < 2 or h < 2:
+        return False
+    fill_ratio = blob.pixels() / float(w * h)
+    if fill_ratio < 0.10:
+        return False
+    return True
 
 
 def pick_ball_blob(blobs):
@@ -257,37 +518,9 @@ while True:
     except Exception:
         avg_center = (0, 0, 0)
 
-    # 同时使用多组阈值做候选，合并所有找到的 blob
+    # 网球检测：优先使用 TH_BALLS 的颜色 blob，再用圆检测做回退
     blobs = []
-    for th in TH_BALLS:
-        try:
-            # 调整为中等门限：兼顾暗光召回与背景噪声抑制，关闭 merge
-            # 自转时运动模糊会让 blob 变碎/变淡：适当放宽像素/面积门限提高召回。
-            bbs = orig.find_blobs([th], pixels_threshold=12, area_threshold=50, merge=False)
-            if bbs:
-                for b in bbs:
-                    blobs.append(b)
-        except Exception:
-            pass
-
-    if blobs:
-        # 过滤掉接近整帧的伪目标（宽或高占比 >= 90%）以及过大的像素面积
-        blobs = [bb for bb in blobs if not (bb.w() >= FRAME_W * 0.9 or bb.h() >= FRAME_H * 0.9) and bb.pixels() < FRAME_AREA * 0.85]
-        # 再过滤：明显的细长黄线/胶带（横向或纵向细长条）
-        blobs = [
-            bb
-            for bb in blobs
-            if not ((bb.w() >= 90 and bb.h() <= 8) or (bb.h() >= 90 and bb.w() <= 8) or (bb.w() >= 140 and bb.h() <= 14) or (bb.h() >= 140 and bb.w() <= 14))
-        ]
-        if DEBUG_PRINT:
-            now_dbg = time.ticks_ms()
-            if time.ticks_diff(now_dbg, _dbg_last_ms) >= DEBUG_PRINT_EVERY_MS:
-                print("blobs found total:", len(blobs))
-                _dbg_last_ms = now_dbg
-        # 不绘制候选蓝框（只在最终选中时绘制红框）
-
-    
-
+    obj = None
     # 黄线范围：允许短暂沿用上一帧，减少抖动
     field_bounds = detect_field_bounds(orig)
     field_held = False
@@ -304,6 +537,15 @@ while True:
         field_lost_count = 0
 
     obj = None
+    if ENABLE_BALL_DETECT:
+        for th in TH_BALLS:
+            try:
+                found = orig.find_blobs([th], pixels_threshold=35, area_threshold=35, merge=False)
+                if found:
+                    for b in found:
+                        blobs.append(b)
+            except Exception:
+                pass
     if blobs:
         # 按分数从高到低排序，优先选择中心颜色偏绿的候选
         candidates = sorted(blobs, key=lambda bb: _blob_score(bb), reverse=True)
@@ -332,7 +574,7 @@ while True:
                     selected = b_cand
                     # 打印中心颜色用于调参观察
                     if DEBUG_PRINT:
-                        print("blob center rgb:", (avg_r, avg_g, avg_b))
+                        _dbg_print("blob center rgb:", (avg_r, avg_g, avg_b))
                     break
             except Exception:
                 pass
@@ -343,7 +585,7 @@ while True:
             try:
                 rgb = orig.get_pixel(selected.cx(), selected.cy())
                 if DEBUG_PRINT:
-                    print("blob center rgb:", rgb)
+                    _dbg_print("blob center rgb:", rgb)
             except Exception:
                 pass
 
@@ -373,7 +615,7 @@ while True:
                 # 选最大的圆作为候选，回退时用红色矩形表示（与 blob 一致）
                 c = max(circles, key=lambda x: x.r())
                 if DEBUG_PRINT:
-                    print("circle candidate:", c.x(), c.y(), c.r())
+                    _dbg_print("circle candidate:", c.x(), c.y(), c.r())
 
                 # 颜色二次确认：避免把场地反光/轮子/杂物的圆形误当成球
                 ok_color = False
@@ -422,6 +664,145 @@ while True:
                 }
         except Exception:
             pass
+
+    # ===== 白色数字/标记检测（优先） =====
+    if obj is None and ENABLE_WHITE_DETECT:
+      try:
+        white_blobs = []
+        for th in TH_WHITE:
+            try:
+                bbs = orig.find_blobs([th], pixels_threshold=10, area_threshold=10, merge=False)
+                if bbs:
+                    for b in bbs:
+                        white_blobs.append(b)
+            except Exception:
+                pass
+
+        if white_blobs:
+            white_blobs = [bb for bb in white_blobs if bb.pixels() < FRAME_AREA * 0.20]
+            if DEBUG_PRINT:
+                try:
+                    _dbg_print("DBG_WHITE_COUNT:", len(white_blobs))
+                except Exception:
+                    pass
+            white_candidates = sorted(white_blobs, key=lambda bb: bb.pixels(), reverse=True)
+            if white_candidates:
+                sel = white_candidates[0]
+                if _is_white_blob(sel):
+                    try:
+                        img.draw_rectangle(sel.rect(), (255, 255, 255))
+                        img.draw_cross(sel.cx(), sel.cy(), (255, 255, 255))
+                    except Exception:
+                        pass
+                    obj = {
+                        "x": int(sel.cx()),
+                        "y": int(sel.cy()),
+                        "w": int(sel.w()),
+                        "h": int(sel.h()),
+                        "size": int(max(sel.w(), sel.h())),
+                        "method": "white_blob",
+                        "color": "white",
+                    }
+      except Exception:
+        pass
+
+    # ===== 蓝色方块检测（回退分支） =====
+    if obj is None and ENABLE_BLUE_BLOCK_DETECT:
+      try:
+        blue_cands = []
+        for th_i, th in enumerate(TH_BLUE):
+            try:
+                # 适度提高门限，减少地板纹理/噪声触发
+                # 允许 merge：白色数字会让蓝色边缘碎成多块，merge 能把碎块合并成更完整的外接框
+                try:
+                    bbs = orig.find_blobs([th], pixels_threshold=BLUE_PIXELS_THRESHOLD, area_threshold=BLUE_AREA_THRESHOLD, merge=True)
+                except Exception:
+                    bbs = orig.find_blobs([th], pixels_threshold=BLUE_PIXELS_THRESHOLD, area_threshold=BLUE_AREA_THRESHOLD, merge=False)
+                if bbs:
+                    for b in bbs:
+                        # 先用更严格的方块评分过滤
+                        s = _blue_square_score(b)
+                        if s > 0:
+                            # 颜色二次确认：优先用“边缘 LAB 统计”避免白色数字影响
+                            ok = False
+                            try:
+                                ok = _is_blue_by_border_lab(orig, b)
+                            except Exception:
+                                ok = False
+                            if not ok:
+                                # 退化：整块 ROI 的 LAB 均值（会被白字稀释，但能拒绝偏黄背景）
+                                ok = _is_blue_by_roi_lab(orig, b)
+                            if not ok:
+                                # 最后兜底：RGB 边缘采样（风险更高）
+                                # 仅在 ROI-LAB 也满足“基本不偏黄”的前提下才允许 RGB 兜底。
+                                if not _is_blue_by_roi_lab(orig, b):
+                                    continue
+                                if not _is_blue_by_border(orig, b):
+                                    continue
+
+                            # 严格阈值略加权，优先选中
+                            if th_i == 0:
+                                s += 80
+                            blue_cands.append((s, b))
+            except Exception:
+                pass
+
+        if blue_cands:
+            # 过滤掉超大blob
+            try:
+                blue_cands = [(s, bb) for (s, bb) in blue_cands if not (bb.w() >= FRAME_W * 0.9 or bb.h() >= FRAME_H * 0.9) and bb.pixels() < FRAME_AREA * 0.92]
+            except Exception:
+                pass
+            if DEBUG_PRINT:
+                try:
+                    _dbg_print("DBG_BLUE_COUNT:", len(blue_cands))
+                except Exception:
+                    pass
+            
+            # 优先挑“更像方块 + 更像蓝色”的候选
+            if blue_cands:
+                # 先按严格评分排序（比单纯 pixels 更稳）
+                try:
+                    blue_cands = sorted(blue_cands, key=lambda it: it[0], reverse=True)
+                except Exception:
+                    pass
+
+                # 注意：偏紫方块在 RGB 下不一定 "B 占优"，
+                # 因此这里不再做二次 RGB 边缘确认（避免误杀真目标）。
+                # 木地板误检主要由 LAB 阈值 + ROI b_mean 门限来压。
+                sel = blue_cands[0][1] if blue_cands else None
+
+                # 若都没通过边缘确认，则宁可不输出（避免误跟随木地板）
+                if sel is None:
+                    sel = None
+                if DEBUG_PRINT:
+                    try:
+                        if sel is not None:
+                            means = _roi_lab_means(orig, sel)
+                            _dbg_print("DBG_BLUE_CAND rect:", sel.rect(), "pixels:", sel.pixels(), "w:", sel.w(), "h:", sel.h(), "lab_mean=", means)
+                        else:
+                            _dbg_print("DBG_BLUE_CAND: none passed border check")
+                    except Exception:
+                        pass
+                
+                if sel is not None:
+                    try:
+                        img.draw_rectangle(sel.rect(), (0, 0, 255))
+                        img.draw_cross(sel.cx(), sel.cy(), (0, 0, 255))
+                    except Exception:
+                        pass
+
+                    obj = {
+                        "x": int(sel.cx()),
+                        "y": int(sel.cy()),
+                        "w": int(sel.w()),
+                        "h": int(sel.h()),
+                        "size": int(max(sel.w(), sel.h())),
+                        "method": "blue_square",
+                        "color": "blue",
+                    }
+      except Exception:
+        pass
 
     # 时间平滑 + 丢失短保持，减小抖动
     if obj is not None:
@@ -474,7 +855,7 @@ while True:
         "frame": {"w": 320, "h": 240},
         "object": obj,
         "zone": None,
-        "objects_count": 1 if obj else 0,
+        "objects_count": (1 if obj else 0),
         "object_out_of_field": bool(out_of_field),
         "field_bounds": list(field_bounds) if field_bounds is not None else None,
         "field_held": bool(field_held),

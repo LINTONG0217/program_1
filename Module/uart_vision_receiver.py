@@ -35,13 +35,28 @@ def _parse_sp_line(line):
 	- New (preferred):  SP|<json>|<crc16_hex>
 	- Legacy:           <json>
 
-	Return (parsed_json_dict_or_None, status_str).
+	Return (parsed_json_or_None, status_str).
+
+	Note:
+	- The vision sender is expected to send a JSON object (dict).
+	- In practice, UART noise can produce lines that still parse as valid JSON
+	  but with the wrong type (e.g. an integer). Callers should validate type.
 	"""
 	if not line:
 		return None, "empty"
 	line = line.strip()
 	if not line:
 		return None, "empty"
+
+	# 容忍串口噪声：有时一行前面会混入其它字符，但包含有效的 "SP|..."。
+	# 只在行首不是 SP| 时才尝试对齐到首次出现的位置。
+	if not line.startswith("SP|"):
+		try:
+			idx = line.find("SP|")
+			if idx > 0:
+				line = line[idx:]
+		except Exception:
+			pass
 
 	# 新协议：SP|<json>|<crc>
 	if line.startswith("SP|"):
@@ -53,6 +68,13 @@ def _parse_sp_line(line):
 			if tag != "SP":
 				return None, "sp_tag"
 			crc_part = crc_part.strip()
+			if not crc_part:
+				return None, "sp_crc_missing"
+			# 容忍 crc 后面夹杂的 \r/空格/噪声字符：仅保留 0-9a-fA-F
+			try:
+				crc_part = "".join([c for c in crc_part if ("0" <= c <= "9") or ("a" <= c <= "f") or ("A" <= c <= "F")])
+			except Exception:
+				pass
 			if not crc_part:
 				return None, "sp_crc_missing"
 			# 计算 CRC
@@ -215,9 +237,13 @@ class VisionReceiver:
 			"offset_y": y - self.frame_height // 2,
 			"held": bool(target.get("held", False)),
 			"method": target.get("method"),
+			"color": target.get("color"),
 		}
 
 	def _normalize_frame(self, raw):
+		# 防御：串口噪声可能导致 json.loads 得到 int/list 等非 dict。
+		if not isinstance(raw, dict):
+			return None
 		frame = raw.get("frame", {})
 		width = int(frame.get("w", self.frame_width))
 		height = int(frame.get("h", self.frame_height))
@@ -275,10 +301,26 @@ class VisionReceiver:
 			pass
 
 		if isinstance(chunk, bytes):
+			# 注意：如果这里 decode 失败，不能用 str(bytes) 回退，
+			# 否则会得到 "b'...'") 形式的字符串，污染协议行并导致大量 parse_fail。
 			try:
 				chunk = chunk.decode("utf-8")
 			except Exception:
-				chunk = str(chunk)
+				# 部分固件支持 errors 参数；不支持则再回退
+				try:
+					chunk = chunk.decode("utf-8", "ignore")
+				except Exception:
+					try:
+						chunk = chunk.decode("latin-1")
+					except Exception:
+						chunk = ""
+
+			# 过滤常见的 NUL 噪声
+			try:
+				if "\x00" in chunk:
+					chunk = chunk.replace("\x00", "")
+			except Exception:
+				pass
 
 		self._rx_buf += chunk
 		# 防止异常情况下（一直没读到 \n）缓冲无限增长
@@ -302,7 +344,8 @@ class VisionReceiver:
 
 		self._rx_stat_total += 1
 		parsed, status = _parse_sp_line(line)
-		if parsed:
+		# 必须是 dict 才算有效帧；否则宁可丢弃，避免 .get() 崩溃。
+		if isinstance(parsed, dict):
 			self._rx_stat_ok += 1
 		else:
 			if status == "crc":
@@ -335,7 +378,12 @@ class VisionReceiver:
 				)
 				self._rx_stat_last_print_ms = now
 
-		self.last_frame = self._normalize_frame(parsed)
+		normalized = self._normalize_frame(parsed)
+		if not normalized:
+			# 类型不对/字段缺失等，视为解析失败但不中断主循环
+			self._rx_stat_parse_fail += 1
+			return None
+		self.last_frame = normalized
 		self.last_update_ms = self.last_frame["ts"]
 		return self.last_frame
 

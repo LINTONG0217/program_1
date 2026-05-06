@@ -41,13 +41,20 @@ def stop_motors(motors):
 
 
 def rotate(motors, duty):
-    for m in motors:
-        m.duty(int(duty))
+    reverses = [
+        getattr(config, "MOTOR_REVERSE", {}).get("fl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("fr", True),
+        getattr(config, "MOTOR_REVERSE", {}).get("bl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("br", True),
+    ]
+    for i, m in enumerate(motors):
+        real_duty = -duty if reverses[i] else duty
+        m.duty(int(real_duty))
 
 
 def main():
     print("board uid:", unique_id())
-    print("script version: manual_vision_search_v1")
+    print("script version: manual_vision_search_v2")
     motors = build_motors()
     vision = VisionReceiver(
         config.VISION_UART_ID,

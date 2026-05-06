@@ -12,7 +12,7 @@ ROTATE_MIN_DUTY = 550
 ROTATE_MAX_DUTY = 1800
 YAW_KP = 45.0
 YAW_KD = 12.0
-YAW_SIGN = -1.0
+YAW_SIGN = float(getattr(config, "HEADING_LOCK_YAW_SIGN", 1.0))
 TOLERANCE_DEG = 2.0
 STABLE_MS = 350
 GYRO_RAW_TO_DPS = 0.07
@@ -143,7 +143,7 @@ def turn_to(motors, imu, yaw, target):
 
 def main():
     print("board uid:", unique_id())
-    print("script version: manual_cardinal_turns_v1")
+    print("script version: manual_cardinal_turns_v2")
     motors = build_motors()
     imu = IMU963RA()
     wait_c14_start()

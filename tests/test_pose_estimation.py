@@ -41,7 +41,7 @@ class PoseEstimationTest(unittest.TestCase):
 		estimator = pose_estimation.PoseEstimator(_Config())
 
 		self.clock.now = 100
-		pose = estimator.update({"fl": 1.0, "fr": 1.0, "bl": 1.0, "br": 1.0}, None)
+		pose = estimator.update({"fl": 1.0, "fr": -1.0, "bl": 1.0, "br": -1.0}, None)
 
 		self.assertAlmostEqual(pose["x"], 0.1)
 		self.assertAlmostEqual(pose["y"], 0.0)

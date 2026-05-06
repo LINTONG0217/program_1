@@ -18,7 +18,7 @@ PUSH_MS = 2200
 GYRO_RAW_TO_DPS = 0.07
 YAW_KP = 110.0
 YAW_KD = 18.0
-YAW_SIGN = -1.0
+YAW_SIGN = float(getattr(config, "HEADING_LOCK_YAW_SIGN", 1.0))
 YAW_MAX_DUTY = 1300
 YAW_DEADBAND_DEG = 0.8
 
@@ -63,16 +63,24 @@ def stop_motors(motors):
 
 
 def set_duties(motors, duties):
+    reverses = [
+        getattr(config, "MOTOR_REVERSE", {}).get("fl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("fr", True),
+        getattr(config, "MOTOR_REVERSE", {}).get("bl", False),
+        getattr(config, "MOTOR_REVERSE", {}).get("br", True),
+    ]
     for i in range(4):
-        motors[i].duty(int(clamp(duties[i], -10000, 10000)))
+        duty = -duties[i] if reverses[i] else duties[i]
+        motors[i].duty(int(clamp(duty, -10000, 10000)))
 
 
 def drive(motors, forward, strafe, rotate):
+    drive_strafe = -strafe
     duties = [
-        -forward - strafe + rotate,
-        forward - strafe + rotate,
-        -forward + strafe + rotate,
-        forward + strafe + rotate,
+        forward + drive_strafe + rotate,
+        -forward + drive_strafe + rotate,
+        forward - drive_strafe + rotate,
+        -forward - drive_strafe + rotate,
     ]
     set_duties(motors, duties)
     return duties
@@ -98,7 +106,7 @@ def gyro_z(imu):
 
 def main():
     print("board uid:", unique_id())
-    print("script version: manual_one_object_cycle_v1")
+    print("script version: manual_one_object_cycle_v3")
     motors = build_motors()
     imu = IMU963RA()
     vision = VisionReceiver(config.VISION_UART_ID, config.VISION_BAUDRATE, config.VISION_TX_PIN, config.VISION_RX_PIN, config.FRAME_WIDTH, config.FRAME_HEIGHT)

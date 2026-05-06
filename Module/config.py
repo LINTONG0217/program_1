@@ -71,12 +71,24 @@ GYRO_RAW_TO_DPS = 0.07
 MAG_RAW_TO_UNIT = 0.0003333333
 GYRO_CALIBRATION_WARMUP = 20
 GYRO_CALIBRATION_SAMPLES = 100
+GYRO_CALIBRATION_INTERVAL_MS = 10
+# 校准超时保护：避免启动阶段因 IMU 读数异常“卡住”
+GYRO_CALIBRATION_TIMEOUT_MS = 2500
 
 # 启动阶段硬件初始化开关（用于排查“看起来卡住”的情况）
 # - 若串口只停在某行不动，可先把 IMU/LCD 暂时关掉确认是否被初始化阻塞。
 IMU_CALIBRATION_ENABLE = True
 LCD_ENABLE = True
-PULSE_PER_METER = 2387.32414637843
+# Encoder distance calibration.
+# Field measurement: command/odometry 2.40m produced about 2.00m actual travel.
+# New value = 3325.625168175775 * 2.40 / 2.00 ~= 3990.75 pulses/m.
+PULSE_PER_METER = 3325.625168175775
+
+# Mecanum/omni strafe often has a different effective scale.
+# If you calibrate lateral motion separately, set PULSE_PER_METER_RIGHT.
+# Otherwise keep it equal to PULSE_PER_METER.
+PULSE_PER_METER_RIGHT_SCALE = 1.0
+PULSE_PER_METER_RIGHT = PULSE_PER_METER * PULSE_PER_METER_RIGHT_SCALE
 IMU_FUSION_Q_ANGLE = 0.001
 IMU_FUSION_Q_GYRO = 0.003
 IMU_FUSION_R_ANGLE = 0.03
@@ -338,6 +350,12 @@ APPROACH_FORWARD_CENTER_PX = 60
 # 横移方向符号：如果出现“球在左但车还在往左横移/越移越偏”，把它改成 -1。
 VISION_OFFSET_X_SIGN = 1
 
+# 视觉横向零点偏置（像素）：
+# 若出现“目标明明在正中，offset_x 仍长期为正/负，导致车一直往右/左漂移”，
+# 在这里填一个常数把 offset_x 拉回 0。
+# 例如 offx_raw 常年约 +60，则设置 VISION_OFFSET_X_BIAS = -60。
+VISION_OFFSET_X_BIAS = 0
+
 # 双视觉时远场相机可能是镜像/安装方向不同，可单独设置符号。
 # 若不确定，先保持与近场一致；当发现 source=far 时方向反了，再改成 -1。
 VISION2_OFFSET_X_SIGN = 1
@@ -361,12 +379,17 @@ LCD_TEXT_COLOR = 0xFFFF
 LCD_SPEED_TO_CELL = 0.0025
 
 # --- 工程化底盘控制参数 ---
-CHASSIS_CMD_DEADBAND = 3
-CHASSIS_MAX_VX_STEP = 8
-CHASSIS_MAX_VY_STEP = 8
-CHASSIS_MAX_VW_STEP = 10
+CHASSIS_CMD_DEADBAND = 2
+CHASSIS_MAX_VX_STEP = 50
+CHASSIS_MAX_VY_STEP = 50
+CHASSIS_MAX_VW_STEP = 50
 CHASSIS_COMMAND_TIMEOUT_MS = 150
 CHASSIS_ENABLE_CLOSED_LOOP = False
+# Axis polarity between logical chassis commands and physical wheel mix.
+# Keep vx > 0 as "forward" for APP/Module code; flip this if the robot moves backward.
+CHASSIS_VX_SIGN = 1.0
+CHASSIS_VY_SIGN = -1.0
+CHASSIS_VW_SIGN = 1.0
 WHEEL_PID_P = 0.35
 WHEEL_PID_I = 0.02
 WHEEL_PID_D = 0.01
@@ -382,15 +405,15 @@ WHEEL_TRIM = {
 # 前进/后退可分别标定（只在纯直行 vx 场景下生效）
 WHEEL_TRIM_FWD = {
 	"fl": 1.00,
-	"fr": 0.78,
+	"fr": 1.00,
 	"bl": 1.00,
-	"br": 0.78,
+	"br": 1.00,
 }
 WHEEL_TRIM_REV = {
 	"fl": 1.00,
-	"fr": 0.90,
+	"fr": 1.00,
 	"bl": 1.00,
-	"br": 0.90,
+	"br": 1.00,
 }
 CHASSIS_DEBUG_PRINT_ENABLE = False
 CHASSIS_DEBUG_PRINT_MS = 200
@@ -444,9 +467,9 @@ MAX_DROPS_TRACKED = 16
 # - 使用四轮编码器里程计估算 x/y 和累计行驶距离；
 # - 到中心后再进入 OpenART 搜球。
 CENTER_FIRST_ENABLE = True
-CENTER_TARGET_X = FIELD_SIZE_X_M * 0.5
-CENTER_TARGET_Y = FIELD_SIZE_Y_M * 0.5
-CENTER_LOCK_CURRENT_YAW = False
+CENTER_TARGET_X = 1.0
+CENTER_TARGET_Y = 1.5
+CENTER_LOCK_CURRENT_YAW = True
 CENTER_LOCK_YAW_DEG = 0.0
 CENTER_NAV_KP = 90.0
 CENTER_NAV_MAX_SPEED = 38.0
@@ -454,11 +477,13 @@ CENTER_NAV_MIN_SPEED = 10.0
 CENTER_NAV_TOLERANCE_M = 0.08
 CENTER_NAV_STABLE_MS = 250
 CENTER_NAV_TIMEOUT_MS = 10000
+# Go to center in two clean legs: +X forward first, then +Y/right.
+CENTER_NAV_AXIS_SEQUENCE_ENABLE = True
 CENTER_YAW_KP = 1.2
 CENTER_YAW_MAX_SPEED = 24.0
 CENTER_YAW_DEADBAND_DEG = 1.5
 CENTER_YAW_TOLERANCE_DEG = 5.0
-CENTER_YAW_SIGN = -1.0
+CENTER_YAW_SIGN = 1.0
 
 # 推球阶段锁航向：直推/平移时用 IMU yaw 主动修正，避免底盘自然漂角。
 PUSH_HEADING_LOCK_ENABLE = True
@@ -470,7 +495,7 @@ PUSH_LOCK_YAW_DEG = 0.0
 PUSH_YAW_KP = 1.2
 PUSH_YAW_MAX_SPEED = 22.0
 PUSH_YAW_DEADBAND_DEG = 1.5
-PUSH_YAW_SIGN = -1.0
+PUSH_YAW_SIGN = 1.0
 
 # --- 硬件手动测试：陀螺仪锁航向 ---
 HEADING_LOCK_CALIBRATE_IMU = True
@@ -483,7 +508,7 @@ HEADING_LOCK_YAW_MAX_SPEED = 28.0
 HEADING_LOCK_YAW_MIN_SPEED = 8.0
 HEADING_LOCK_YAW_DEADBAND_DEG = 1.0
 # 如果车被扭偏后越修越偏，把这个值改成 -1.0。
-HEADING_LOCK_YAW_SIGN = -1.0
+HEADING_LOCK_YAW_SIGN = 1.0
 
 # 发车区判定（默认左下角 0.5m x 0.5m）
 START_ZONE_X_MIN = 0.0

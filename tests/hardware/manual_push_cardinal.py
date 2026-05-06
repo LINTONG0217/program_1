@@ -7,13 +7,13 @@ from seekfree import IMU963RA, MOTOR_CONTROLLER
 from Module import config
 
 
-FORWARD_DUTIES = [-3600, 3600, -3600, 3600]
+FORWARD_DUTIES = [3600, -3600, 3600, -3600]
 PUSH_MS = 2500
 TARGET_YAW_DEG = 0.0
 GYRO_RAW_TO_DPS = 0.07
 YAW_KP = 115.0
 YAW_KD = 18.0
-YAW_SIGN = -1.0
+YAW_SIGN = float(getattr(config, "HEADING_LOCK_YAW_SIGN", 1.0))
 YAW_MAX_DUTY = 1450
 YAW_MIN_DUTY = 220
 YAW_DEADBAND_DEG = 0.7
@@ -92,7 +92,7 @@ def gyro_z(imu):
 
 def main():
     print("board uid:", unique_id())
-    print("script version: manual_push_cardinal_v1")
+    print("script version: manual_push_cardinal_v2")
     motors = build_motors()
     imu = IMU963RA()
     wait_c14_start()

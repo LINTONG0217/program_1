@@ -4,9 +4,10 @@ from seekfree import IMU963RA, MOTOR_CONTROLLER
 from Module import config
 
 
-# Raw chassis commands are intentionally kept identical to manual_chassis_raw.py.
-FORWARD_DUTIES = [-3600, 3600, -3600, 3600]
-BACKWARD_DUTIES = [3600, -3600, 3600, -3600]
+# Logical chassis commands are intentionally kept identical to
+# manual_chassis_raw.py before MOTOR_REVERSE is applied.
+FORWARD_DUTIES = [3600, -3600, 3600, -3600]
+BACKWARD_DUTIES = [-3600, 3600, -3600, 3600]
 
 # Heading-lock tuning. Rotation duty is added equally to all four raw motors,
 # matching manual_chassis_raw.py rotate cw/ccw patterns.
@@ -18,7 +19,7 @@ YAW_KD = 18.0
 YAW_MIN_DUTY = 220
 YAW_MAX_DUTY = 1450
 YAW_DEADBAND_DEG = 0.7
-YAW_SIGN = -1.0
+YAW_SIGN = 1.0
 GYRO_FILTER_ALPHA = 0.35
 ROT_FILTER_ALPHA = 0.45
 ROT_STEP_LIMIT = 260
@@ -50,11 +51,8 @@ def wait_c14_start():
 
 
 def step(title, duties, duration_ms=1200):
-    print("raw:", title, duties)
-    motors[0].duty(duties[0])
-    motors[1].duty(duties[1])
-    motors[2].duty(duties[2])
-    motors[3].duty(duties[3])
+    print("logical:", title, duties)
+    set_duties(duties)
     time.sleep_ms(duration_ms)
 
 
@@ -146,7 +144,7 @@ motors = [motor_fl, motor_fr, motor_bl, motor_br]
 
 
 print("board uid:", unique_id())
-print("script version: raw_heading_lock_like_chassis_raw_v1")
+print("script version: raw_heading_lock_like_chassis_raw_v2")
 print("raw motor channels ready")
 wait_c14_start()
 

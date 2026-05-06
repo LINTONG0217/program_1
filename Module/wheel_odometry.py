@@ -29,8 +29,8 @@ class AdvancedOdometry:
 
 		v_lf, v_rf, v_lr, v_rr = current_speeds
 
-		vx_local = (v_lf + v_rf + v_lr + v_rr) / 4.0
-		vy_local = (v_lf - v_rf - v_lr + v_rr) / 4.0
+		vx_local = (v_lf - v_rf + v_lr - v_rr) / 4.0
+		vy_local = (-v_lf - v_rf + v_lr + v_rr) / 4.0
 
 		if abs(vx_local) < 0.005:
 			vx_local = 0.0

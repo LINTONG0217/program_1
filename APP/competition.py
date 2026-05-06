@@ -51,6 +51,7 @@ def build_vision(cfg):
             frame_height=cfg.FRAME_HEIGHT,
             debug_print=debug_rx,
             label="near",
+            config=cfg,
         )
 
         far_uart = getattr(cfg, "VISION2_UART_ID", None)
@@ -79,6 +80,7 @@ def build_vision(cfg):
             frame_height=cfg.FRAME_HEIGHT,
             debug_print=debug_rx,
             label="far",
+            config=cfg,
         )
         print("dual vision: enabled")
         return DualVisionReceiver(near, far, config=cfg)
@@ -92,6 +94,7 @@ def build_vision(cfg):
         frame_height=cfg.FRAME_HEIGHT,
         debug_print=debug_rx,
         label="near",
+        config=cfg,
     )
 
 
@@ -124,31 +127,6 @@ def build_obstacle_devices(cfg):
     return obstacle, ultrasonic
 
 
-def build_uwb_pose(cfg):
-    if not bool(getattr(cfg, "UWB_POSE_ENABLE", False)):
-        return None
-    try:
-        from Module.uwb_pose_receiver import UWBPoseReceiver
-
-        receiver = UWBPoseReceiver(
-            cfg.UWB_UART_ID,
-            cfg.UWB_BAUDRATE,
-            tx_pin=getattr(cfg, "UWB_TX_PIN", None),
-            rx_pin=getattr(cfg, "UWB_RX_PIN", None),
-            fmt=getattr(cfg, "UWB_POSE_FORMAT", "csv"),
-        )
-        print("uwb pose: enabled")
-
-        def pose_source():
-            receiver.read_pose()
-            return receiver.get_pose()
-
-        return pose_source
-    except Exception as e:
-        print("uwb pose unavailable:", e)
-        return None
-
-
 def main():
     try:
         print("competition: build=2026-04-04 basic-fallback")
@@ -168,7 +146,7 @@ def main():
         from Module.task_controller_basic import SmartCarController
 
         local_chassis = build_chassis()
-        # In forced-basic mode we deliberately skip dual-link/obstacle/UWB/display layers.
+        # In forced-basic mode we deliberately skip dual-link/obstacle/display layers.
         chassis = local_chassis
         vision = build_vision(config)
         try:
@@ -216,8 +194,6 @@ def main():
     controller = None
     control_board = MainControl(config)
     control_board.init()
-
-    uwb_pose_source = build_uwb_pose(config)
 
     system_holder = {"system": None}
 
@@ -294,7 +270,7 @@ def main():
     system = RobotSystem(
         control_board,
         DriveLayer(chassis, control_board),
-        EstimationLayer(config, control_board, pose_source=uwb_pose_source),
+        EstimationLayer(config, control_board),
         TaskLayer(controller),
         display_layer=DisplayLayer(control_board),
         communication_layer=None,

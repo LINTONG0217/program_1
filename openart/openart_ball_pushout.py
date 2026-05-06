@@ -28,6 +28,13 @@ BALL_THRESHOLDS = (
     (45, 100, -50, 5, 10, 95),
 )
 
+# Red sandbag thresholds. Tune on site if lighting shifts.
+RED_BAG_THRESHOLDS = (
+    (12, 100, 25, 90, -10, 80),
+    (8, 85, 35, 100, -20, 70),
+    (20, 100, 18, 80, 5, 95),
+)
+
 # Yellow field boundary tape. Used only to report object_out_of_field.
 FIELD_THRESHOLD = (40, 95, -15, 25, 35, 95)
 FIELD_MIN_PIXELS = 120
@@ -46,6 +53,7 @@ MAX_ASPECT = 1.85
 LOST_HOLD_FRAMES = 2
 SMOOTH_ALPHA = 0.45
 EDGE_OUT_MARGIN = 14
+ENABLE_RED_BAG_DETECT = True
 
 
 def crc16_ibm(data_bytes, init=0xFFFF):
@@ -99,6 +107,21 @@ def blob_score(blob):
 
     square_penalty = abs(aspect - 1.0)
     return blob.pixels() * (1.0 - 0.35 * square_penalty) * (0.75 + 0.25 * fill)
+
+
+def red_bag_score(blob):
+    w = max(1, int(blob.w()))
+    h = max(1, int(blob.h()))
+    size = max(w, h)
+    if size < MIN_BALL_SIZE or size > MAX_BALL_SIZE:
+        return -1
+    aspect = w / float(h)
+    if aspect < 0.35 or aspect > 2.8:
+        return -1
+    fill = blob.pixels() / float(w * h)
+    if fill < 0.10:
+        return -1
+    return blob.pixels() * (0.80 + 0.20 * fill)
 
 
 def is_greenish(img, x, y):
@@ -165,6 +188,52 @@ def detect_ball(img):
         "size": int(max(best.w(), best.h())),
         "held": False,
         "method": "ball_blob",
+    }
+
+
+def detect_red_bag(img):
+    if not ENABLE_RED_BAG_DETECT:
+        return None
+    blobs = []
+    for threshold in RED_BAG_THRESHOLDS:
+        try:
+            found = img.find_blobs(
+                [threshold],
+                pixels_threshold=80,
+                area_threshold=80,
+                merge=True,
+            )
+            if found:
+                blobs.extend(found)
+        except Exception:
+            pass
+
+    best = None
+    best_score = -1
+    for blob in blobs:
+        score = red_bag_score(blob)
+        if score > best_score:
+            best_score = score
+            best = blob
+
+    if best is None:
+        return None
+
+    try:
+        img.draw_rectangle(best.rect(), color=(255, 0, 0))
+        img.draw_cross(best.cx(), best.cy(), color=(255, 0, 0))
+    except Exception:
+        pass
+
+    return {
+        "x": int(best.cx()),
+        "y": int(best.cy()),
+        "w": int(best.w()),
+        "h": int(best.h()),
+        "size": int(max(best.w(), best.h())),
+        "held": False,
+        "method": "red_bag_blob",
+        "color": "red",
     }
 
 
@@ -264,7 +333,7 @@ last_print = time.ticks_ms()
 
 while True:
     img = sensor.snapshot()
-    obj = detect_ball(img)
+    obj = detect_red_bag(img) or detect_ball(img)
 
     if obj is not None:
         if last_obj is not None:

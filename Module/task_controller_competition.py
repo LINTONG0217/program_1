@@ -12,6 +12,7 @@ class CompetitionController(SmartCarController):
 	STATE_GO_CENTER = "go_center"
 	STATE_COOP_PUSH = "coop_push"
 	STATE_AFTER_PUSH_RETREAT = "after_push_retreat"
+	STATE_TURN_AFTER_PUSH = "turn_after_push"
 	STATE_RETURN_HOME = "return_home"
 	STATE_WAIT_NEXT_TASK = "wait_next_task"
 	STATE_MISSION_COMPLETE = "mission_complete"
@@ -55,6 +56,10 @@ class CompetitionController(SmartCarController):
 		self.drop_points = []
 		self.center_yaw_lock = None
 		self.push_yaw_lock = None
+		self.start_yaw_lock = None
+		self.turn_target_yaw = None
+		self.turn_stable_start_ms = None
+		self.turn_start_ms = None
 		self.center_nav_start_ms = None
 		self.center_stable_start_ms = None
 		self._center_pose_warned = False
@@ -116,6 +121,20 @@ class CompetitionController(SmartCarController):
 		cardinals = (0.0, 90.0, 180.0, 270.0)
 		return min(cardinals, key=lambda item: abs(self._angle_error(item, yaw)))
 
+	def _ensure_start_yaw_lock(self):
+		if self.start_yaw_lock is not None:
+			return self.start_yaw_lock
+		cfg_yaw = getattr(self.cfg, "PUSH_START_YAW_DEG", None)
+		if cfg_yaw is not None:
+			self.start_yaw_lock = float(cfg_yaw)
+			return self.start_yaw_lock
+		pose = self._get_pose()
+		if pose:
+			self.start_yaw_lock = float(pose.get("yaw", 0.0))
+		else:
+			self.start_yaw_lock = float(getattr(self.cfg, "PUSH_LOCK_YAW_DEG", 0.0))
+		return self.start_yaw_lock
+
 	def _nearest_boundary_yaw(self, pose):
 		if not pose:
 			return 0.0
@@ -133,6 +152,8 @@ class CompetitionController(SmartCarController):
 
 	def _select_push_yaw_lock(self, pose, yaw):
 		mode = getattr(self.cfg, "PUSH_CARDINAL_MODE", "nearest_boundary")
+		if mode == "startup":
+			return self._ensure_start_yaw_lock()
 		if mode == "fixed":
 			return self._snap_cardinal_yaw(float(getattr(self.cfg, "PUSH_LOCK_YAW_DEG", 0.0)))
 		if mode == "current":
@@ -312,6 +333,55 @@ class CompetitionController(SmartCarController):
 			self.wait_next_task_start_ms = time.ticks_ms()
 			self._set_state(self.STATE_WAIT_NEXT_TASK)
 
+	def _finish_push_cycle(self, reason):
+		self.chassis.stop()
+		self.completed_push_count += 1
+		print(reason, "count=", self.completed_push_count)
+		self.push_start_ms = None
+		self.push_yaw_lock = None
+		if bool(getattr(self.cfg, "PUSH_AFTER_OUT_TURN_180_ENABLE", True)):
+			self.turn_target_yaw = (self._ensure_start_yaw_lock() + 180.0) % 360.0
+			self.turn_stable_start_ms = None
+			self.turn_start_ms = time.ticks_ms()
+			self._set_state(self.STATE_TURN_AFTER_PUSH)
+			return
+		self._start_retreat_then_search()
+
+	def _turn_after_push_step(self):
+		pose = self._get_pose()
+		if not pose:
+			self.chassis.rotate(float(getattr(self.cfg, "SEARCH_ROT_SPEED", 18)))
+			return
+		if self.turn_target_yaw is None:
+			self.turn_target_yaw = (self._ensure_start_yaw_lock() + 180.0) % 360.0
+		yaw = float(pose.get("yaw", 0.0))
+		vw, err = self._heading_lock_vw(self.turn_target_yaw, yaw, "PUSH")
+		tol = float(getattr(self.cfg, "PUSH_YAW_ALIGN_TOLERANCE_DEG", 8.0))
+		now = time.ticks_ms()
+		if abs(err) <= tol:
+			if self.turn_stable_start_ms is None:
+				self.turn_stable_start_ms = now
+			stable_ms = int(getattr(self.cfg, "PUSH_TURN_AFTER_OUT_STABLE_MS", 250))
+			if time.ticks_diff(now, self.turn_stable_start_ms) >= stable_ms:
+				self.chassis.stop()
+				self.turn_target_yaw = None
+				self.turn_stable_start_ms = None
+				self.turn_start_ms = None
+				self._start_search_again()
+				return
+		else:
+			self.turn_stable_start_ms = None
+		timeout_ms = int(getattr(self.cfg, "PUSH_TURN_AFTER_OUT_TIMEOUT_MS", 2500))
+		if self.turn_start_ms is not None and timeout_ms > 0 and time.ticks_diff(now, self.turn_start_ms) >= timeout_ms:
+			print("turn after push timeout", "yaw={:.1f}".format(yaw), "target={:.1f}".format(self.turn_target_yaw))
+			self.chassis.stop()
+			self.turn_target_yaw = None
+			self.turn_stable_start_ms = None
+			self.turn_start_ms = None
+			self._start_search_again()
+			return
+		self.chassis.move(0, 0, vw)
+
 	def _start_retreat_then_search(self):
 		"""推球完成后短暂后退回场内，再继续搜下一个。"""
 		enable = bool(getattr(self.cfg, "AFTER_PUSH_RETREAT_ENABLE", False))
@@ -464,11 +534,7 @@ class CompetitionController(SmartCarController):
 			self.push_target_lost_count = 0
 
 		if self._object_is_out(frame):
-			self.chassis.stop()
-			self.completed_push_count += 1
-			print("object out detected", "count=", self.completed_push_count)
-			self.push_start_ms = None
-			self._start_retreat_then_search()
+			self._finish_push_cycle("object out detected")
 			return
 
 		if not target:
@@ -477,28 +543,21 @@ class CompetitionController(SmartCarController):
 			if bool(getattr(self.cfg, "PUSH_REQUIRE_TARGET", True)):
 				self.chassis.stop()
 			if self.push_target_lost_count >= int(getattr(self.cfg, "PUSH_LOST_CONFIRM_FRAMES", 3)):
-				self.chassis.stop()
-				self.completed_push_count += 1
-				print("push target lost confirmed", "count=", self.completed_push_count)
-				self.push_start_ms = None
-				self._start_retreat_then_search()
+				self._finish_push_cycle("push target lost confirmed")
 				return
 		else:
 			self.push_target_lost_count = 0
 
 		if time.ticks_diff(now, self.push_start_ms) >= self.cfg.PUSH_TIME_MS:
-			self.chassis.stop()
-			self.completed_push_count += 1
-			print("push cycle done", "count=", self.completed_push_count)
-			self.push_start_ms = None
-			self.push_yaw_lock = None
-			self._start_retreat_then_search()
+			self._finish_push_cycle("push cycle done")
 			return
 
 		obstacle_state, distance_hit = self._obstacle_detected()
 
 		if zone and target:
 			pair_error = self._signed_offset_x(zone) - self._signed_offset_x(target)
+		elif target and bool(getattr(self.cfg, "PUSH_KEEP_OBJECT_CENTER_ENABLE", True)):
+			pair_error = self._signed_offset_x(target)
 		elif target:
 			pair_error = self._signed_offset_x(target)
 		else:
@@ -599,6 +658,10 @@ class CompetitionController(SmartCarController):
 			self.wait_next_task_start_ms = None
 		if new_state != self.STATE_AFTER_PUSH_RETREAT:
 			self.retreat_until_ms = None
+		if new_state != self.STATE_TURN_AFTER_PUSH:
+			self.turn_target_yaw = None
+			self.turn_stable_start_ms = None
+			self.turn_start_ms = None
 		if new_state != self.STATE_SEARCH_OBJECT:
 			self.search_empty_start_ms = None
 		if new_state != self.STATE_RETURN_HOME:
@@ -642,6 +705,10 @@ class CompetitionController(SmartCarController):
 
 		if self.state == self.STATE_AFTER_PUSH_RETREAT:
 			self._after_push_retreat_step()
+			return
+
+		if self.state == self.STATE_TURN_AFTER_PUSH:
+			self._turn_after_push_step()
 			return
 
 		if self.state == self.STATE_RETURN_HOME:

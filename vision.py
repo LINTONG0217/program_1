@@ -110,6 +110,17 @@ TH_BALLS = [
 ]
 ENABLE_BALL_DETECT = True
 
+# 红色沙袋阈值（LAB）：现场光照差异较大，先给宽松多候选，后续按 OpenART 调参收紧。
+# 红色通常 A 通道明显为正，B 可能略正或偏黄。
+TH_RED_BAG = [
+    (12, 100, 25, 90, -10, 80),
+    (8, 85, 35, 100, -20, 70),
+    (20, 100, 18, 80, 5, 95),
+]
+ENABLE_RED_BAG_DETECT = True
+RED_BAG_PIXELS_THRESHOLD = 80
+RED_BAG_AREA_THRESHOLD = 80
+
 # 蓝色方块阈值：现场测试结果
 # 推荐使用你提供的阈值（LAB 空间）
 # 调整为捕捉偏紫蓝色（场地较亮时）
@@ -226,6 +237,38 @@ def _square_score(b):
 
     square_penalty = abs(aspect - 1.0)
     return b.pixels() * (1.0 - 0.6 * square_penalty) * (0.85 + 0.15 * fill_ratio)
+
+
+def _red_bag_score(b):
+    try:
+        w = max(1, int(b.w()))
+        h = max(1, int(b.h()))
+    except Exception:
+        return -1
+
+    size = max(w, h)
+    if size < MIN_SIZE or size > MAX_SIZE:
+        return -1
+    aspect = w / float(h)
+    if aspect < 0.35 or aspect > 2.8:
+        return -1
+    fill_ratio = b.pixels() / float(w * h)
+    if fill_ratio < 0.10:
+        return -1
+    if b.pixels() >= FRAME_AREA * 0.75:
+        return -1
+    return b.pixels() * (0.80 + 0.20 * fill_ratio)
+
+
+def _is_red_by_roi_lab(img_src, blob):
+    means = _roi_lab_means(img_src, blob)
+    if means is None:
+        return True
+    try:
+        _l, _a, _b = int(means[0]), int(means[1]), int(means[2])
+    except Exception:
+        return True
+    return _a >= 18 and _b >= -25
 
 
 def _blue_square_score(b):
@@ -518,7 +561,7 @@ while True:
     except Exception:
         avg_center = (0, 0, 0)
 
-    # 网球检测：优先使用 TH_BALLS 的颜色 blob，再用圆检测做回退
+    # 红色沙袋检测优先；没有沙袋时再找网球。
     blobs = []
     obj = None
     # 黄线范围：允许短暂沿用上一帧，减少抖动
@@ -537,16 +580,53 @@ while True:
         field_lost_count = 0
 
     obj = None
+    if ENABLE_RED_BAG_DETECT:
+        try:
+            red_cands = []
+            for th in TH_RED_BAG:
+                try:
+                    found = orig.find_blobs([th], pixels_threshold=RED_BAG_PIXELS_THRESHOLD, area_threshold=RED_BAG_AREA_THRESHOLD, merge=True)
+                    if found:
+                        for b in found:
+                            s = _red_bag_score(b)
+                            if s > 0 and _is_red_by_roi_lab(orig, b):
+                                red_cands.append((s, b))
+                except Exception:
+                    pass
+            if red_cands:
+                red_cands = sorted(red_cands, key=lambda it: it[0], reverse=True)
+                b = red_cands[0][1]
+                try:
+                    img.draw_rectangle(b.rect(), (255, 0, 0))
+                    img.draw_cross(b.cx(), b.cy(), (255, 0, 0))
+                except Exception:
+                    pass
+                obj = {
+                    "x": int(b.cx()),
+                    "y": int(b.cy()),
+                    "w": int(b.w()),
+                    "h": int(b.h()),
+                    "size": int(max(b.w(), b.h())),
+                    "method": "red_bag_blob",
+                    "color": "red",
+                    "held": False,
+                }
+                if DEBUG_PRINT:
+                    _dbg_print("red bag:", b.rect(), "pixels:", b.pixels())
+        except Exception:
+            pass
+
     if ENABLE_BALL_DETECT:
-        for th in TH_BALLS:
-            try:
-                found = orig.find_blobs([th], pixels_threshold=35, area_threshold=35, merge=False)
-                if found:
-                    for b in found:
-                        blobs.append(b)
-            except Exception:
-                pass
-    if blobs:
+        if obj is None:
+            for th in TH_BALLS:
+                try:
+                    found = orig.find_blobs([th], pixels_threshold=35, area_threshold=35, merge=False)
+                    if found:
+                        for b in found:
+                            blobs.append(b)
+                except Exception:
+                    pass
+    if obj is None and blobs:
         # 按分数从高到低排序，优先选择中心颜色偏绿的候选
         candidates = sorted(blobs, key=lambda bb: _blob_score(bb), reverse=True)
         selected = None

@@ -8,6 +8,11 @@ except ImportError:
 import time
 from machine import Pin, UART
 
+try:
+	from Module.vision_kalman import VisionTargetKalman
+except Exception:
+	VisionTargetKalman = None
+
 
 def _crc16_ibm(data_bytes, init=0xFFFF):
 	"""CRC-16/IBM(ARC), init=0xFFFF, poly=0xA001.
@@ -124,12 +129,13 @@ def _try_fpioa_register_uart(uid, tx_pin, rx_pin):
 
 
 class VisionReceiver:
-	def __init__(self, uart_id, baudrate, tx_pin, rx_pin, frame_width=320, frame_height=240, debug_print=False, label=None):
+	def __init__(self, uart_id, baudrate, tx_pin, rx_pin, frame_width=320, frame_height=240, debug_print=False, label=None, config=None):
 		self.frame_width = frame_width
 		self.frame_height = frame_height
 		self.debug_print = bool(debug_print)
 		self.label = str(label) if label is not None else None
 		self.uart_id = uart_id
+		self.cfg = config
 		self.last_frame = None
 		self.last_update_ms = time.ticks_ms()
 		self._rx_buf = ""
@@ -139,7 +145,19 @@ class VisionReceiver:
 		self._rx_stat_crc_fail = 0
 		self._rx_stat_parse_fail = 0
 		self._rx_stat_last_print_ms = time.ticks_ms()
+		self._kalman_enable = bool(getattr(config, "VISION_KALMAN_ENABLE", True))
+		self._kalman_object = self._make_target_filter(config)
+		self._kalman_zone = self._make_target_filter(config)
+		self._kalman_field = self._make_target_filter(config)
 		self.uart = self._create_uart(uart_id, baudrate, tx_pin, rx_pin)
+
+	def _make_target_filter(self, cfg):
+		if (not self._kalman_enable) or VisionTargetKalman is None:
+			return None
+		q = float(getattr(cfg, "VISION_KALMAN_PROCESS_VAR", 35.0))
+		r = float(getattr(cfg, "VISION_KALMAN_MEASUREMENT_VAR", 80.0))
+		reset_ms = int(getattr(cfg, "VISION_KALMAN_RESET_MS", 350))
+		return VisionTargetKalman(q, r, reset_ms)
 
 	def age_ms(self):
 		try:
@@ -240,6 +258,24 @@ class VisionReceiver:
 			"color": target.get("color"),
 		}
 
+	def _filter_target(self, target, target_filter):
+		if target_filter is None:
+			return target
+		filtered = target_filter.update(target)
+		if not filtered:
+			return None
+		filtered["offset_x"] = int(filtered.get("x", self.frame_width // 2)) - self.frame_width // 2
+		filtered["offset_y"] = int(filtered.get("y", self.frame_height // 2)) - self.frame_height // 2
+		return filtered
+
+	def _mark_missing_filters(self, obj, zone, field):
+		if self._kalman_object is not None and not obj:
+			self._kalman_object.mark_missing()
+		if self._kalman_zone is not None and not zone:
+			self._kalman_zone.mark_missing()
+		if self._kalman_field is not None and not field:
+			self._kalman_field.mark_missing()
+
 	def _normalize_frame(self, raw):
 		# 防御：串口噪声可能导致 json.loads 得到 int/list 等非 dict。
 		if not isinstance(raw, dict):
@@ -258,11 +294,19 @@ class VisionReceiver:
 			else:
 				objects_count = 1 if (raw.get("object") or raw.get("target")) else 0
 
+		obj = self._normalize_target(raw.get("object") or raw.get("target"))
+		zone = self._normalize_target(raw.get("zone") or raw.get("goal"))
+		field = self._normalize_target(raw.get("field") or raw.get("border") or raw.get("boundary"))
+		self._mark_missing_filters(obj, zone, field)
+		obj = self._filter_target(obj, self._kalman_object)
+		zone = self._filter_target(zone, self._kalman_zone)
+		field = self._filter_target(field, self._kalman_field)
+
 		return {
 			"frame": {"w": width, "h": height},
-			"object": self._normalize_target(raw.get("object") or raw.get("target")),
-			"zone": self._normalize_target(raw.get("zone") or raw.get("goal")),
-			"field": self._normalize_target(raw.get("field") or raw.get("border") or raw.get("boundary")),
+			"object": obj,
+			"zone": zone,
+			"field": field,
 			"object_out_of_field": bool(raw.get("object_out_of_field", False)),
 			"objects_count": int(objects_count),
 			"ts": time.ticks_ms(),

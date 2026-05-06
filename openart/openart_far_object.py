@@ -42,6 +42,12 @@ sensor.set_auto_whitebal(False)
 sensor.set_auto_gain(False)
 
 TH_BALL = (35, 92, -35, 18, 18, 90)
+TH_RED_BAG = [
+    (12, 100, 25, 90, -10, 80),
+    (8, 85, 35, 100, -20, 70),
+    (20, 100, 18, 80, 5, 95),
+]
+ENABLE_RED_BAG_DETECT = True
 
 # Far camera: lower thresholds to catch smaller blobs.
 PIXELS_TH = 60
@@ -50,7 +56,20 @@ AREA_TH = 60
 while True:
     img = sensor.snapshot()
 
-    blobs = img.find_blobs([TH_BALL], pixels_threshold=PIXELS_TH, area_threshold=AREA_TH, merge=True)
+    blobs = []
+    found_red = False
+    if ENABLE_RED_BAG_DETECT:
+        for th in TH_RED_BAG:
+            try:
+                found = img.find_blobs([th], pixels_threshold=80, area_threshold=80, merge=True)
+                if found:
+                    blobs.extend(found)
+                    found_red = True
+            except Exception:
+                pass
+    if not blobs:
+        blobs = img.find_blobs([TH_BALL], pixels_threshold=PIXELS_TH, area_threshold=AREA_TH, merge=True)
+        found_red = False
 
     obj = None
     if blobs:
@@ -65,7 +84,8 @@ while True:
             "h": int(b.h()),
             "size": int(max(b.w(), b.h())),
             "held": False,
-            "method": "far_blob",
+            "method": "red_bag_blob" if found_red else "far_blob",
+            "color": "red" if found_red else None,
         }
 
     base_payload = {

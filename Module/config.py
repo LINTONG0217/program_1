@@ -138,6 +138,12 @@ VISION_RX_PIN = 5   # 主控丝印引脚
 # 串口视觉调试输出（VisionReceiver 内部的 VISION_RX 打印）
 VISION_DEBUG_PRINT_RX = False
 
+# OpenART/串口视觉目标卡尔曼滤波：跟随、推运、比赛程序都会使用滤波后的 object/zone。
+VISION_KALMAN_ENABLE = True
+VISION_KALMAN_PROCESS_VAR = 35.0
+VISION_KALMAN_MEASUREMENT_VAR = 80.0
+VISION_KALMAN_RESET_MS = 350
+
 # 双 OpenART 链路状态打印：仅在启用双 OpenART 时建议开启。
 VISION_DUAL_STATUS_PRINT = False
 VISION_DUAL_STATUS_PRINT_MS = 1000
@@ -166,6 +172,11 @@ OPENART_AUTO_GAIN = False
 # LAB 阈值，需现场标定
 # 网球（偏黄绿）初始推荐：先保证能稳定检出，再逐步收紧
 OPENART_OBJECT_THRESHOLD = (35, 92, -35, 18, 18, 90)
+OPENART_RED_BAG_THRESHOLDS = (
+	(12, 100, 25, 90, -10, 80),
+	(8, 85, 35, 100, -20, 70),
+	(20, 100, 18, 80, 5, 95),
+)
 OPENART_ZONE_THRESHOLD = (20, 80, -70, -10, 10, 70)
 # 场地边界（10cm黄色胶带）阈值：需现场标定
 OPENART_FIELD_THRESHOLD = (40, 95, -15, 25, 35, 95)
@@ -224,22 +235,6 @@ CAR_LINK_MAX_QUEUE = 8
 
 # 主车也回传自身状态（用于双向位姿共享）
 CAR_LINK_MASTER_STATUS_MS = 120
-
-# --- UWB(DW3000) 位姿输入（可选） ---
-# 若你的 DW3000 定位模块能通过串口输出位姿，可启用此项让系统直接使用 UWB 位姿。
-UWB_POSE_ENABLE = False
-UWB_UART_ID = 1
-UWB_BAUDRATE = 115200
-UWB_TX_PIN = None
-UWB_RX_PIN = None
-
-# 输出格式：
-# - "csv": 形如 "x,y,yaw\n"（单位：米/米/度）
-# - "json": 形如 '{"x":0.12,"y":0.34,"yaw":90.0}\n'
-UWB_POSE_FORMAT = "csv"
-
-# 若 UWB 超过该时间未更新，则不再覆盖里程计（ms）
-UWB_POSE_MAX_AGE_MS = 250
 
 # 副车相对主车的横向偏置。
 # 并排推时，副车在主车右侧可设为正值，在左侧设为负值。
@@ -487,15 +482,20 @@ CENTER_YAW_SIGN = 1.0
 
 # 推球阶段锁航向：直推/平移时用 IMU yaw 主动修正，避免底盘自然漂角。
 PUSH_HEADING_LOCK_ENABLE = True
-PUSH_CARDINAL_MODE = "nearest_boundary"  # nearest_boundary/current/fixed
+PUSH_CARDINAL_MODE = "startup"  # startup/nearest_boundary/current/fixed
 PUSH_ALIGN_YAW_BEFORE_MOVE = True
 PUSH_YAW_ALIGN_TOLERANCE_DEG = 8.0
+PUSH_START_YAW_DEG = 0.0
 PUSH_LOCK_CURRENT_YAW = False
 PUSH_LOCK_YAW_DEG = 0.0
 PUSH_YAW_KP = 1.2
 PUSH_YAW_MAX_SPEED = 22.0
 PUSH_YAW_DEADBAND_DEG = 1.5
 PUSH_YAW_SIGN = 1.0
+PUSH_KEEP_OBJECT_CENTER_ENABLE = True
+PUSH_AFTER_OUT_TURN_180_ENABLE = True
+PUSH_TURN_AFTER_OUT_STABLE_MS = 250
+PUSH_TURN_AFTER_OUT_TIMEOUT_MS = 2500
 
 # --- 硬件手动测试：陀螺仪锁航向 ---
 HEADING_LOCK_CALIBRATE_IMU = True
@@ -539,7 +539,7 @@ SLAVE_PUSH_MAX_ROTATE = 20
 ASSIST_CENTER_KEEP_OUT_MARGIN_M = 0.25
 
 # --- 协同推送（主从并排推球）---
-# 开启后：副车 push 阶段允许有限前进 + 主车可用UWB位姿对副车做队形修正
+# 开启后：副车 push 阶段允许有限前进，并使用主从状态做队形修正
 COOP_PUSH_ENABLE = True
 COOP_SLAVE_PUSH_ALLOW_VX_MAX = 28
 

@@ -18,10 +18,9 @@ class DriveLayer:
 
 
 class EstimationLayer:
-	def __init__(self, config, control_board=None, pose_source=None):
+	def __init__(self, config, control_board=None):
 		self.control_board = control_board
 		self.estimator = PoseEstimator(config)
-		self.pose_source = pose_source
 		if getattr(config, "POSE_INIT_ENABLE", False):
 			self.estimator.request_pose_init(
 				getattr(config, "POSE_INIT_X", 0.0),
@@ -36,34 +35,6 @@ class EstimationLayer:
 		if not encoder_data and hasattr(chassis, "get_wheel_feedback"):
 			encoder_data = chassis.get_wheel_feedback()
 		self.last_pose = self.estimator.update(encoder_data, imu_data)
-
-		provider = self.pose_source
-		if callable(provider):
-			try:
-				external = provider()
-			except Exception:
-				external = None
-			if isinstance(external, dict):
-				max_age = int(getattr(self.estimator.cfg, "UWB_POSE_MAX_AGE_MS", 250))
-				ts = external.get("ts")
-				fresh = True
-				if ts is not None:
-					try:
-						fresh = (time.ticks_diff(time.ticks_ms(), int(ts)) <= max_age)
-					except Exception:
-						fresh = True
-				if fresh:
-					try:
-						x = float(external.get("x", self.last_pose.get("x", 0.0)))
-						y = float(external.get("y", self.last_pose.get("y", 0.0)))
-						yaw = float(external.get("yaw", self.last_pose.get("yaw", 0.0)))
-						self.estimator.set_pose(x, y, yaw, current_absolute_yaw=yaw)
-						# Keep velocities from estimator.update; override pose fields.
-						self.last_pose["x"] = x
-						self.last_pose["y"] = y
-						self.last_pose["yaw"] = yaw
-					except Exception:
-						pass
 		return self.last_pose
 
 
